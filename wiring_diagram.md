@@ -22,9 +22,11 @@
 | **Encoder** | SW | GPIO5 | Right Pin 9 | Digital Input (LP_GPIO5) | LP core accessible for deep sleep wake |
 | **Encoder** | + | 3V3 | Left Pin 1 | Power | 3.3V supply |
 | **Encoder** | GND | GND | Right Pin 1 | Ground | — |
-| **Batt Divider** | VBAT | VBAT | Left Pin 16 | Battery rail | Raw LiPo voltage (3.0–4.2V) |
-| **Batt Divider** | GND | GND | Left Pin 15 | Ground | — |
-| **Batt Divider** | ADC | GPIO6 | Left Pin 7 | ADC1_CH5 | Divided voltage; no strapping, no onboard conflicts |
+| **MAX17043** | VCC | 3V3 | Left Pin 1 | Power | 3.3V logic supply |
+| **MAX17043** | GND | GND | Left Pin 15 | Ground | — |
+| **MAX17043** | CELL | VBAT | Left Pin 16 | Battery voltage | Direct battery measurement input (no divider needed) |
+| **MAX17043** | SDA | GPIO23 | Right Pin 5 | I2C SDA (shared with OLED) | I2C address 0x36 |
+| **MAX17043** | SCL | GPIO24 | Right Pin 4 | I2C SCL (shared with OLED) | Shared I2C bus |
 | **RGB LED** | DATA | GPIO27 | Right Pin 7 | WS2812B data | Already wired onboard — no external wiring needed |
 
 > **Note:** The OPT101 board's other pins (1M, -V, COM) are left unconnected. With pins 1
@@ -43,10 +45,10 @@
    3V3 ─── Pin 1  │  3V3              GND    │  Pin 1 ─── GND
            Pin 2  │  RST              TX     │  Pin 2
            Pin 3  │  GPIO2            RX     │  Pin 3
-           Pin 4  │  GPIO3            GPIO24 │  Pin 4 ─── OLED SCL
-           Pin 5  │  GPIO0            GPIO23 │  Pin 5 ─── OLED SDA
+           Pin 4  │  GPIO3            GPIO24 │  Pin 4 ─── I2C SCL (OLED + MAX17043)
+           Pin 5  │  GPIO0            GPIO23 │  Pin 5 ─── I2C SDA (OLED + MAX17043)
            Pin 6  │  GPIO1            N/15   │  Pin 6     (do not use)
-  BATT ADC Pin 7  │  GPIO6            GPIO27 │  Pin 7     (onboard RGB LED)
+           Pin 7  │  GPIO6            GPIO27 │  Pin 7     (onboard RGB LED)
            Pin 8  │  GPIO7            GPIO4  │  Pin 8 ─── OPT101 OUT
    ENC CLK Pin 9  │  GPIO8            GPIO5  │  Pin 9 ─── Encoder SW
            Pin 10 │  GPIO9            NC     │  Pin 10
@@ -70,22 +72,25 @@
   │ -V   (NC) │       └──────────┘       │ SW  ─────────┼─ GP5
   │ COM  (NC) │                          └──────────────┘
   └───────────┘
-                  ┌──────────────────┐
-                  │ Battery Voltage  │
-                  │ Divider Board    │
-                  │ (2× 100 kΩ)      │
-                  ├──────────────────┤
-                  │ VBAT ────────────┼─ VBAT (Left Pin 16)
-                  │ GND ─────────────┼─ GND  (Left Pin 15)
-                  │ ADC ─────────────┼─ GP6  (Left Pin 7)
-                  └──────────────────┘
+              ┌──────────────────┐
+              │ MAX17043         │
+              │ Fuel Gauge (I2C) │
+              │ Addr: 0x36       │
+              ├──────────────────┤
+              │ VCC ─────────────┼─ 3V3  (Left Pin 1)
+              │ GND ─────────────┼─ GND  (Left Pin 15)
+              │ CELL ────────────┼─ VBAT (Left Pin 16)
+              │ SDA ─────────────┼─ GP23 (shared with OLED)
+              │ SCL ─────────────┼─ GP24 (shared with OLED)
+              └──────────────────┘
 
-  Battery Divider Schematic:
+  I2C Bus Topology:
 
-    VBAT ──┤ 100 kΩ ├──┬──┤ 100 kΩ ├── GND
-                       │
-                      ADC out → GPIO6
-                    (VBAT / 2)
+    ESP32-C5 GP23 (SDA) ──┬── OLED SDA (0x3C)
+                          └── MAX17043 SDA (0x36)
+
+    ESP32-C5 GP24 (SCL) ──┬── OLED SCL
+                          └── MAX17043 SCL
 ```
 
 ---
@@ -131,21 +136,25 @@
 - The KY-040 module has built-in pull-up resistors on CLK, DT, and SW, so no external pull-ups
   are needed.
 
-### Battery Voltage Divider → GPIO6 (ADC1_CH5)
+### MAX17043 Fuel Gauge → Shared I2C Bus (GPIO23 SDA, GPIO24 SCL)
 
-- The LiPo battery voltage (3.0–4.2V) exceeds the ESP32-C5's ADC input range, so a **resistor
-  voltage divider** is needed to scale it down.
-- A **2× 100 kΩ** divider (1:1 ratio) gives `Vout = VBAT / 2`:
-  - At 4.2V (full charge): **2.1V** — within ADC 6 dB range (~0–2.2V)
-  - At 3.0V (cutoff): **1.5V**
-  - Current drain through divider: 4.2V / 200 kΩ = **~21 µA** — negligible
-- GPIO6 (`ADC1_CH5`) is chosen because it's **not a strapping pin** and has no onboard connections.
-  The FSPICLK alternate function is unused in this project.
-- In firmware, multiply the ADC-calibrated voltage reading by **2** to recover the actual battery
-  voltage.
-- Per overview §5.2: battery ADC reads use **one-shot mode** (16–32 samples averaged) every
-  30–60 seconds when idle. Battery reads are **suspended during recording** to avoid interfering
-  with OPT101 DMA continuous mode on the shared ADC1 unit.
+- The MAX17043 is an I2C fuel gauge (address **0x36**) that shares the same I2C bus as the OLED
+  display (address **0x3C**). No additional GPIO pins are consumed — only a shared bus.
+- **Why not an ADC voltage divider?** Using the ESP32-C5's internal ADC for battery monitoring
+  would consume one of the six ADC1 channels. More critically, the ADC continuous DMA mode
+  (used for OPT101 recording) configures the ADC unit globally — reading a battery channel
+  during recording would interfere with sensor data acquisition. The MAX17043 eliminates this
+  conflict entirely since it uses I2C, not ADC.
+- **CELL pin** connects directly to the VBAT rail (battery positive). The MAX17043 handles the
+  full LiPo voltage range (2.5–4.5V) internally — no external voltage divider is needed.
+- **VCC pin** is powered from the 3V3 regulated rail (not VBAT) for stable logic-level I2C
+  communication.
+- The MAX17043's **ModelGauge™** algorithm provides accurate state-of-charge (SoC%) without
+  requiring a sense resistor or coulomb counting, and compensates for load and temperature
+  variations — significantly more accurate than a voltage-to-percentage lookup table.
+- **I2C bus during recording**: Battery reads are deferred during active recording to minimize
+  I2C bus traffic (the OLED is also frozen). A reading is taken immediately before and after
+  each recording session. This is a software-level precaution, not a hardware conflict.
 
 ---
 
@@ -155,11 +164,10 @@
 |:---|:---|:---|:---|
 | GPIO4 | OPT101 OUT | Analog In (ADC1_CH3) | Sensor signal |
 | GPIO5 | Encoder SW | Digital In (LP_GPIO5) | Button; LP core wake source |
-| GPIO6 | Battery Divider | Analog In (ADC1_CH5) | Battery voltage / 2 |
 | GPIO8 | Encoder CLK | Digital In (interrupt) | Rotation signal A |
 | GPIO10 | Encoder DT | Digital In (interrupt) | Rotation signal B |
-| GPIO23 | OLED SDA | I2C Data | Via GPIO Matrix |
-| GPIO24 | OLED SCL | I2C Clock | Via GPIO Matrix |
+| GPIO23 | I2C SDA | I2C Data | Shared: OLED (0x3C) + MAX17043 (0x36) |
+| GPIO24 | I2C SCL | I2C Clock | Shared: OLED + MAX17043 |
 | GPIO27 | RGB LED | WS2812B Data | Onboard, no external wiring |
 
 ### Reserved / Unavailable Pins
@@ -183,6 +191,7 @@
 | GPIO1 | Available (ADC1_CH0, strapping) |
 | GPIO2 | Available (strapping + JTAG — use with care) |
 | GPIO3 | Available (JTAG) |
+| GPIO6 | Available (ADC1_CH5, FSPICLK — no strapping) |
 | GPIO7 | Available (strapping) |
 | GPIO25 | Available (strapping) |
 | GPIO26 | Available (clean GP pin) |

@@ -31,6 +31,7 @@ Build a battery-powered, handheld IR sensor recording device that:
 | **Flash** | 32 MB SPI NOR Flash |
 | **Wireless** | Dual-band Wi-Fi 6 (2.4 + 5 GHz), Bluetooth 5 LE, 802.15.4 |
 | **Sensor** | OPT101 monolithic photodiode + transimpedance amplifier, with IR bandpass filter |
+| **Fuel Gauge** | MAX17043 I2C LiPo battery fuel gauge (I2C address 0x36) — voltage + state-of-charge via ModelGauge™ |
 | **Display** | 0.96" I2C OLED 128×64 (top 16 px yellow, bottom 48 px blue) |
 | **Input** | Rotary encoder with push button (rotate left/right, short press, long press) |
 | **Status LED** | Onboard WS2812B addressable RGB LED (GPIO27) |
@@ -59,7 +60,7 @@ Build a battery-powered, handheld IR sensor recording device that:
 | Attenuation | 6 dB recommended (range ~0–2.2 V, matching OPT101 output ceiling) |
 | Sampling mode | **Continuous mode with DMA** (GDMA controller) |
 | Configurable rates | 1 kHz, 5 kHz, **10 kHz** (default), 20 kHz |
-| Channel during recording | OPT101 channel only (battery ADC excluded from DMA scan) |
+| Channel during recording | OPT101 channel only |
 
 ### 3.3. DMA Strategy
 
@@ -142,33 +143,55 @@ Data payload:
 
 ## 5. Battery Monitoring
 
-### 5.1. Hardware
+### 5.1. Hardware: MAX17043 Fuel Gauge
 
-- The Waveshare board includes an onboard **voltage divider** for battery monitoring connected to
-  an ADC1 pin. The exact pin and divider ratio should be confirmed from the board schematic.
-- The voltage divider scales the LiPo voltage (3.0–4.2 V) to within the ESP32-C5 ADC input range.
-
-### 5.2. Sampling Strategy
+Battery monitoring uses an external **MAX17043** I2C fuel gauge IC instead of the ESP32's
+internal ADC. This eliminates ADC channel conflicts with the OPT101 and provides significantly
+more accurate state-of-charge estimation.
 
 | Parameter | Value |
 | :--- | :--- |
-| Read frequency | Every **30–60 seconds** when awake and idle |
-| Technique | Take **16–32 samples** in quick succession (~5–10 ms), average the result |
-| During recording | **Do not** read battery ADC — it shares the same ADC1 unit; reading it could interfere with OPT101 DMA continuous mode |
-| After recording | Take a fresh battery reading immediately after recording completes |
+| IC | MAX17043 (Maxim/Analog Devices) |
+| Interface | I2C, address **0x36** (shared bus with OLED at 0x3C) |
+| Inputs | CELL pin → VBAT (battery positive), GND → ground |
+| Power | VCC → 3V3 (ESP32 regulated rail) |
+| Voltage accuracy | ±7.5 mV |
+| SoC algorithm | ModelGauge™ — no coulomb counter, no sense resistor, no calibration needed |
+| SoC resolution | 1/256% |
+| Quiescent current | ~50 µA (from CELL/VBAT) |
+| I2C speed | Standard (100 kHz) or Fast (400 kHz) |
 
-### 5.3. Voltage-to-Percentage Mapping
+### 5.2. Wiring (5 Pins)
 
-Use a standard LiPo discharge curve lookup:
+| MAX17043 Pin | Connects To | Purpose |
+| :--- | :--- | :--- |
+| SDA | I2C SDA (shared with OLED) | I2C data |
+| SCL | I2C SCL (shared with OLED) | I2C clock |
+| GND | GND | Ground reference |
+| CELL | VBAT (battery rail) | Direct battery voltage measurement input |
+| VCC | 3V3 (ESP32 rail) | IC logic supply |
 
-| Voltage | Approximate % |
+> **Note:** The MAX17043's CELL pin connects **directly** to the battery positive terminal (VBAT
+> rail) — no voltage divider is needed. The IC handles the full LiPo voltage range internally.
+
+### 5.3. Sampling Strategy
+
+| Parameter | Value |
 | :--- | :--- |
-| 4.20 V | 100% |
-| 4.00 V | ~80% |
-| 3.80 V | ~55% |
-| 3.70 V | ~35% |
-| 3.50 V | ~10% |
-| 3.00 V | 0% (cutoff) |
+| Read frequency | Every **30–60 seconds** when awake |
+| Technique | Single I2C register read — the MAX17043 continuously tracks voltage and SoC internally |
+| During recording | **Safe to read** — uses I2C, not ADC; no conflict with OPT101 DMA continuous mode. However, reads are deferred during recording to minimize I2C bus activity (the OLED is also frozen). A read is taken immediately before and after each recording. |
+| Data returned | Voltage (mV) from VCELL register; SoC (%) from SOC register |
+
+### 5.4. Advantages Over ADC Voltage Divider
+
+- **No ADC channel consumed** — all ADC1 channels remain available for the OPT101.
+- **No voltage divider circuit** — fewer external components, no resistor tolerance errors.
+- **Accurate SoC** — the ModelGauge™ algorithm accounts for load, temperature, and battery aging;
+  a simple voltage-to-percentage lookup table is much less accurate under varying loads.
+- **Can read during recording** — since it uses I2C (not ADC), there's no conflict with the
+  OPT101's ADC DMA continuous mode.
+- **Low power** — ~50 µA quiescent from the battery, negligible impact on battery life.
 
 ---
 
@@ -202,6 +225,8 @@ Shows the current screen context: status screen, menu, or recording feedback.
 
 - The **OLED is frozen** to a static "Recording..." screen. No redraws are performed to avoid I2C
   bus contention and CPU time competition with the DMA buffer drain task.
+- **Battery reads** (MAX17043 via I2C) are deferred during recording to minimize I2C bus activity.
+  A reading is taken immediately before and after each recording session.
 - The **RGB LED** provides visual feedback instead:
   - 🔴 **Red pulsing** = recording in progress
 - After recording completes, the OLED refreshes with the result summary.
@@ -392,6 +417,7 @@ WebSocket message types (JSON):
 | ESP-IDF LittleFS | Flash filesystem |
 | ESP-IDF OTA | Over-the-air firmware updates |
 | SSD1306 / U8g2 | OLED display driver (I2C) |
+| MAX17043 driver | I2C fuel gauge — battery voltage and SoC% readings |
 | FastLED or ESP-IDF RMT | WS2812B RGB LED control |
 | Rotary encoder library | Encoder input handling (interrupt-driven) |
 | ESP-IDF ADC Calibration | Curve fitting calibration |
@@ -408,7 +434,7 @@ WebSocket message types (JSON):
 | **Storage Flush** | High | Write staged samples from PSRAM to LittleFS in chunks. Runs during recording. |
 | **WiFi / HTTP** | Medium | Handle REST API requests and WebSocket messages. Yield-friendly. |
 | **UI Task** | Low | OLED rendering, rotary encoder polling, LED updates. Suspended during recording (except LED). |
-| **Battery Monitor** | Lowest | Periodic battery voltage ADC reads. Suspended during recording. |
+| **Battery Monitor** | Lowest | Periodic MAX17043 I2C reads (voltage + SoC%). Deferred during recording to minimize I2C bus activity. |
 | **Idle / Watchdog** | System | FreeRTOS idle task and task watchdog. |
 
 ### 9.4. Recording Flow
@@ -417,7 +443,7 @@ WebSocket message types (JSON):
 1. Record command received (from app or device menu)
 2. Validate: sufficient free space? → if no, refuse with warning
 3. Freeze OLED to "Recording..." screen
-4. Suspend battery monitor task
+4. Defer battery monitor reads (minimize I2C bus activity during recording)
 5. Set RGB LED to pulsing red
 6. Configure ADC continuous mode: OPT101 channel only, requested sample rate
 7. Allocate PSRAM staging buffer
@@ -591,7 +617,7 @@ IR_sensor/
 | App framework | Tauri + Svelte + TypeScript | Lightweight (~5-10 MB), web-based UI (vibe-codable), Rust backend for file I/O |
 | Storage format | Custom binary (IREC) on LittleFS | Compact (2 bytes/sample), CRC32 integrity, optional zlib compression |
 | Display during recording | Frozen OLED + RGB LED | Avoids I2C contention and CPU load on single-core MCU |
-| Battery monitoring | Periodic averaged reads, paused during recording | Shares ADC1 unit with OPT101; cannot run simultaneously in continuous DMA mode |
+| Battery monitoring | MAX17043 I2C fuel gauge | Accurate ModelGauge™ SoC; no ADC channel conflict with OPT101; can read during recording |
 | Time sync | Tablet sends UTC on connect; RTC persists in deep sleep | No external RTC hardware needed; drift corrected on each reconnection |
 | Deep sleep wake | Long press (≥2 s) on encoder button via LP core | Ultra-low standby power; LP RISC-V core monitors GPIO |
 | Max recording duration | 300 seconds | Prevents accidental flash exhaustion; ~6 MB at 10 kHz |
