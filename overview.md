@@ -285,17 +285,19 @@ From the **Status Screen** (shown on wake), a **short press** opens the **Main M
 │   ├── Screen Brightness → [Low │ Medium │ High]
 │   ├── Screen Timeout → [30s │ 1 min │ 5 min │ Never]
 │   ├── Default Sample Rate → [1 kHz │ 5 kHz │ 10 kHz │ 20 kHz]
-│   ├── Default Duration → [5s │ 10s │ 30s │ 60s]
-│   └── OTA Firmware Update (available when WiFi connected + tablet provides file)
+│   └── Default Duration → [5s │ 10s │ 30s │ 60s]
 │
 └── 💤 Deep Sleep → [Confirm? Yes / No]
 ```
 
 ### 6.5. Settings Persistence
 
-- User settings (brightness, timeout, default sample rate, default duration) are stored in a
-  small config file on LittleFS and loaded at boot.
+- User settings (brightness, timeout, default sample rate, default duration) are stored in
+  **ESP-IDF NVS (Non-Volatile Storage)** — the platform's built-in key-value store.
+- NVS provides power-loss-safe transactional writes and built-in wear leveling, with no need for
+  a custom file format or serialization code.
 - Settings survive deep sleep and power cycles.
+- NVS uses its own dedicated flash partition, separate from the LittleFS data partition.
 
 ---
 
@@ -343,16 +345,18 @@ no router or internet required.
 | IP | `192.168.4.1` (default ESP-IDF SoftAP address) |
 | Max clients | 1 (only the tablet) |
 
-### 8.2. Protocol: HTTP REST API + WebSocket
+### 8.2. Protocol: HTTP REST API (Polling)
 
-The ESP32 runs a lightweight HTTP server with the following endpoints:
+The ESP32 runs a lightweight HTTP server (`esp_http_server`). The app polls `GET /api/status`
+at **~1 Hz** to track device state, recording progress, and battery level. No WebSocket is
+needed — the simplicity of stateless REST is preferred on a single-core MCU with limited RAM.
 
 #### REST Endpoints
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
-| `GET` | `/api/status` | Device status: battery, free space, recording count, WiFi info, current state |
-| `POST` | `/api/record` | Start recording. Body: `{"duration_s": 30, "sample_rate_hz": 10000}` |
+| `GET` | `/api/status` | Device status: battery (voltage + SoC%), free space, recording count, WiFi info, current state (`idle` / `recording`), and if recording: `{elapsed_s, total_s, recording_id}` |
+| `POST` | `/api/record` | Start recording. Body: `{"duration_s": 30, "sample_rate_hz": 10000}`. Returns error if insufficient space. |
 | `GET` | `/api/recordings` | List all recordings with metadata (id, timestamp, duration, sample rate, size, compressed flag) |
 | `GET` | `/api/recordings/{id}` | Download a specific recording (binary, IREC format) |
 | `DELETE` | `/api/recordings/{id}` | Delete a specific recording |
@@ -361,27 +365,17 @@ The ESP32 runs a lightweight HTTP server with the following endpoints:
 | `POST` | `/api/compress` | Trigger compression of all uncompressed recordings |
 | `POST` | `/api/settings` | Update device settings. Body: JSON of setting key-values |
 | `GET` | `/api/settings` | Read current device settings |
-| `POST` | `/api/ota` | Upload firmware binary for OTA update |
 
-#### WebSocket Endpoint
+#### Polling Pattern (App Side)
 
-| Path | Description |
-| :--- | :--- |
-| `/ws` | Bidirectional real-time channel |
-
-WebSocket message types (JSON):
-
-| Direction | Type | Payload | Purpose |
-| :--- | :--- | :--- | :--- |
-| ESP→App | `recording_started` | `{id, sample_rate, duration}` | Notify recording began |
-| ESP→App | `recording_progress` | `{id, elapsed_s, total_s}` | Periodic progress update |
-| ESP→App | `recording_complete` | `{id, size_bytes, duration_s}` | Notify recording finished; app can now GET the file |
-| ESP→App | `recording_error` | `{id, error}` | Recording failed (e.g., storage full) |
-| ESP→App | `battery_update` | `{voltage_mv, percent}` | Periodic battery status |
-| ESP→App | `status_update` | `{state, free_space, ...}` | General state change |
-| App→ESP | `start_preview` | `{rate_hz}` | Request low-rate live preview stream (~100 Hz) |
-| App→ESP | `stop_preview` | — | Stop live preview |
-| ESP→App | `preview_data` | `{samples: [uint16, ...]}` | Chunk of live preview samples |
+```
+While connected:
+  Every 1 second → GET /api/status
+    - Update battery display, free space, connection indicator
+    - If state == "recording": show progress bar (elapsed_s / total_s)
+    - If state changed from "recording" → "idle": recording complete
+      → GET /api/recordings/{id} to download
+```
 
 ### 8.3. Time Synchronization Protocol
 
@@ -412,10 +406,9 @@ WebSocket message types (JSON):
 | :--- | :--- |
 | ESP-IDF ADC Continuous Driver | DMA-based ADC sampling |
 | ESP-IDF WiFi (SoftAP) | WiFi access point |
-| ESP-IDF HTTP Server | REST API |
-| ESP-IDF WebSocket component | Real-time push notifications |
-| ESP-IDF LittleFS | Flash filesystem |
-| ESP-IDF OTA | Over-the-air firmware updates |
+| ESP-IDF HTTP Server | REST API (`esp_http_server`) |
+| ESP-IDF NVS Flash | Key-value settings storage |
+| ESP-IDF LittleFS | Flash filesystem for recordings |
 | SSD1306 / U8g2 | OLED display driver (I2C) |
 | MAX17043 driver | I2C fuel gauge — battery voltage and SoC% readings |
 | FastLED or ESP-IDF RMT | WS2812B RGB LED control |
@@ -432,7 +425,7 @@ WebSocket message types (JSON):
 | :--- | :--- | :--- |
 | **ADC DMA Drain** | Highest | Pull samples from DMA buffers → PSRAM staging buffer. Runs only during active recording. |
 | **Storage Flush** | High | Write staged samples from PSRAM to LittleFS in chunks. Runs during recording. |
-| **WiFi / HTTP** | Medium | Handle REST API requests and WebSocket messages. Yield-friendly. |
+| **WiFi / HTTP** | Medium | Handle REST API requests. Yield-friendly. |
 | **UI Task** | Low | OLED rendering, rotary encoder polling, LED updates. Suspended during recording (except LED). |
 | **Battery Monitor** | Lowest | Periodic MAX17043 I2C reads (voltage + SoC%). Deferred during recording to minimize I2C bus activity. |
 | **Idle / Watchdog** | System | FreeRTOS idle task and task watchdog. |
@@ -460,7 +453,7 @@ WebSocket message types (JSON):
 13. Resume battery monitor and UI tasks
 14. Update OLED with recording summary
 15. Set RGB LED back to green (or cyan if tablet connected)
-16. If tablet connected, send `recording_complete` via WebSocket
+16. App discovers completion on next GET /api/status poll (≤1 s)
 ```
 
 ---
@@ -484,7 +477,7 @@ WebSocket message types (JSON):
 | **uPlot** or **Chart.js** | High-performance time-series graphing with zoom/pan |
 | **Svelte** | Reactive UI framework |
 | **TypeScript** | Type-safe frontend code |
-| Tauri HTTP/WebSocket APIs | Communication with ESP32 |
+| Tauri HTTP / fetch API | Communication with ESP32 (REST polling) |
 
 ### 10.3. App Features
 
@@ -524,25 +517,14 @@ WebSocket message types (JSON):
    - Export recording data as **JSON**
    - Export graph as image (PNG/SVG)
 
-6. **Live Preview**
-   - Low-rate (~100 Hz) real-time sensor stream for alignment/setup purposes
-   - Only available when NOT recording
-   - Rolling waveform display
-
-7. **Device Settings** (remote configuration)
+6. **Device Settings** (remote configuration)
    - Screen brightness
    - Screen timeout
    - Default sample rate
    - Default recording duration
    - WiFi SSID and password
 
-8. **OTA Firmware Update**
-   - Select firmware binary file on tablet
-   - Upload to device via `/api/ota`
-   - Progress indicator
-   - Automatic device restart
-
-9. **Statistics**
+7. **Statistics**
    - Per-recording: min, max, mean, standard deviation of ADC values
    - Display in a summary panel alongside the graph
 
@@ -566,23 +548,7 @@ The app stores downloaded recordings locally on the tablet filesystem (via Tauri
 
 ---
 
-## 11. OTA Firmware Update Flow
-
-```
-1. User opens "OTA Update" in app
-2. User selects firmware .bin file from tablet filesystem
-3. App uploads binary via POST /api/ota (chunked transfer)
-4. ESP32 writes firmware to OTA partition using esp_ota_ops
-5. ESP32 validates the firmware image
-6. ESP32 sets the new partition as boot partition
-7. ESP32 restarts
-8. On successful boot, the new firmware is confirmed
-9. App reconnects and verifies new firmware version via GET /api/status
-```
-
----
-
-## 12. Directory Structure
+## 11. Directory Structure
 
 ```
 IR_sensor/
@@ -607,15 +573,16 @@ IR_sensor/
 
 ---
 
-## 13. Key Design Decisions Summary
+## 12. Key Design Decisions Summary
 
 | Decision | Choice | Rationale |
 | :--- | :--- | :--- |
 | Sampling approach | ADC Continuous Mode + DMA | Hardware-driven sampling, no CPU jitter, reliable at 10 kHz+ |
 | Firmware language | C++ (ESP-IDF via PlatformIO) | DMA/ADC APIs not available in MicroPython; deterministic timing required |
-| Communication | WiFi SoftAP + HTTP/WebSocket | High throughput for 1+ MB transfers; no router needed; simpler than BLE GATT |
+| Communication | WiFi SoftAP + HTTP REST (polling) | High throughput for 1+ MB transfers; no router needed; stateless REST is simpler than WebSocket on single-core MCU |
 | App framework | Tauri + Svelte + TypeScript | Lightweight (~5-10 MB), web-based UI (vibe-codable), Rust backend for file I/O |
 | Storage format | Custom binary (IREC) on LittleFS | Compact (2 bytes/sample), CRC32 integrity, optional zlib compression |
+| Settings persistence | ESP-IDF NVS (key-value) | Platform built-in; power-loss safe; no custom serialization code |
 | Display during recording | Frozen OLED + RGB LED | Avoids I2C contention and CPU load on single-core MCU |
 | Battery monitoring | MAX17043 I2C fuel gauge | Accurate ModelGauge™ SoC; no ADC channel conflict with OPT101; can read during recording |
 | Time sync | Tablet sends UTC on connect; RTC persists in deep sleep | No external RTC hardware needed; drift corrected on each reconnection |
