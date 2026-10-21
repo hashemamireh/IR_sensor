@@ -1,0 +1,35 @@
+{
+  "build": {
+    "core": "esp32",
+    "extra_flags": [
+      "-DBOARD_HAS_PSRAM"
+    ],
+    "f_cpu": "240000000L",
+    "f_flash": "80000000L",
+    "flash_mode": "qio",
+    "psram_type": "opi",
+    "mcu": "esp32c5",
+    "variant": "esp32c5"
+  },
+  "connectivity": [
+    "bluetooth",
+    "wifi"
+  ],
+  "debug": {
+    "openocd_target": "esp32c5.cfg"
+  },
+  "frameworks": [
+    "arduino",
+    "espidf"
+  ],
+  "name": "Waveshare ESP32-C5-WIFI6-KIT-N32R8 (32 MB Flash, 8 MB PSRAM OPI)",
+  "upload": {
+    "flash_size": "32MB",
+    "maximum_ram_size": 327680,
+    "maximum_size": 33554432,
+    "require_upload_port": true,
+    "speed": 460800
+  },
+  "url": "https://docs.waveshare.com/ESP32-C5-WIFI6-KIT",
+  "vendor": "Waveshare"
+}

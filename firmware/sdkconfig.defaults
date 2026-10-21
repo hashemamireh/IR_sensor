@@ -1,0 +1,26 @@
+# ESP-IDF sdkconfig defaults for IR Sensor device
+
+# --- Flash & PSRAM ---
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# --- Partition table ---
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- LittleFS ---
+CONFIG_LITTLEFS_MAX_PARTITIONS=1
+
+# --- WiFi ---
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
+
+# --- ADC ---
+CONFIG_ADC_CONTINUOUS_ISR_IRAM_SAFE=y
+
+# --- FreeRTOS ---
+CONFIG_FREERTOS_HZ=1000
+
+# --- Log level (reduce for release) ---
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

@@ -1,1 +1,26 @@
-/.DS_Store
+# OS files
+.DS_Store
+Thumbs.db
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# ESP-IDF
+build/
+managed_components/
+sdkconfig
+sdkconfig.old
+sdkconfig.*
+!sdkconfig.defaults
+!sdkconfig.defaults.*
+
+# Language / tooling
+compile_commands.json
+.clangd/
+.cache/
+
+# IDEs
+.vscode/
+.idea/
