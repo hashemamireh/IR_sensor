@@ -58,6 +58,11 @@ static led_strip_handle_t       rgb_led     = nullptr;
 static httpd_handle_t           http_server = nullptr;
 static adc_continuous_handle_t  adc_handle  = nullptr;
 
+// ── Shared device state (written by tasks, read by HTTP handler) ────────────
+
+static uint16_t battery_mv  = 0;  // millivolts from VCELL
+static uint8_t  battery_pct = 0;  // integer percent from SOC
+
 // ── NVS ─────────────────────────────────────────────────────────────────────
 
 static void init_nvs() {
@@ -201,10 +206,16 @@ static void init_wifi_ap() {
 // ── HTTP Server (REST API stubs) ────────────────────────────────────────────
 
 static esp_err_t handle_status(httpd_req_t* req) {
-    // TODO: return real status JSON
-    const char* resp = "{\"state\":\"idle\",\"battery_pct\":0,\"free_kb\":0}";
+    size_t total = 0, used = 0;
+    esp_littlefs_info(LITTLEFS_PARTITION_LABEL, &total, &used);
+
+    char buf[128];
+    snprintf(buf, sizeof(buf),
+             "{\"state\":\"idle\",\"battery_pct\":%u,\"battery_mv\":%u,\"free_kb\":%zu}",
+             battery_pct, battery_mv, (total - used) / 1024);
+
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+    return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
 }
 
 static void start_http_server() {
@@ -240,9 +251,21 @@ static void task_ui(void* arg) {
 }
 
 static void task_battery_monitor(void* arg) {
+    const uint8_t reg_vcell = 0x02;
+    const uint8_t reg_soc   = 0x04;
+    uint8_t buf[2];
+
     for (;;) {
-        // TODO: read MAX17043 VCELL + SOC registers via I2C
-        ESP_LOGD(TAG, "battery monitor tick");
+        // MAX17043: VCELL register (0x02) — upper 12 bits × 1.25 mV
+        if (i2c_master_transmit_receive(fuel_dev, &reg_vcell, 1, buf, 2, 100) == ESP_OK) {
+            battery_mv = (((uint16_t)buf[0] << 4) | (buf[1] >> 4)) * 5 / 4;
+        }
+        // MAX17043: SOC register (0x04) — upper byte = integer percent
+        if (i2c_master_transmit_receive(fuel_dev, &reg_soc, 1, buf, 2, 100) == ESP_OK) {
+            battery_pct = buf[0];
+        }
+
+        ESP_LOGD(TAG, "battery: %u mV, %u%%", battery_mv, battery_pct);
         vTaskDelay(pdMS_TO_TICKS(BATTERY_READ_INTERVAL_MS));
     }
 }
