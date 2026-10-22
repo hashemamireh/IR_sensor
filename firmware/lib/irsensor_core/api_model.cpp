@@ -72,4 +72,16 @@ void write_busy(JsonWriter& w, DeviceState s) {
      .end_object();
 }
 
+void write_error(JsonWriter& w, const char* code, const char* field) {
+    w.begin_object().key("error").str(code);
+    if (field) w.key("field").str(field);
+    w.end_object();
+}
+
+bool is_plausible_utc_us(int64_t utc_us) {
+    constexpr int64_t MIN_UTC_US = 1704067200LL * 1000000;  // 2024-01-01T00:00:00Z
+    constexpr int64_t MAX_UTC_US = 4102444800LL * 1000000;  // 2100-01-01T00:00:00Z
+    return utc_us >= MIN_UTC_US && utc_us < MAX_UTC_US;
+}
+
 }  // namespace api

@@ -98,6 +98,24 @@ static void test_busy_body() {
     TEST_ASSERT_EQUAL_STRING("{\"error\":\"busy\",\"state\":\"saving\"}", buf);
 }
 
+static void test_error_body() {
+    char buf[96];
+    JsonWriter w(buf, sizeof(buf));
+    api::write_error(w, "not_found");
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"not_found\"}", buf);
+
+    JsonWriter w2(buf, sizeof(buf));
+    api::write_error(w2, "invalid_setting", "brightness");
+    TEST_ASSERT_EQUAL_STRING("{\"error\":\"invalid_setting\",\"field\":\"brightness\"}", buf);
+}
+
+static void test_plausible_utc() {
+    TEST_ASSERT_TRUE(api::is_plausible_utc_us(1792540800000000LL));   // 2026-10
+    TEST_ASSERT_FALSE(api::is_plausible_utc_us(0));
+    TEST_ASSERT_FALSE(api::is_plausible_utc_us(1792540800LL));        // seconds, not µs
+    TEST_ASSERT_FALSE(api::is_plausible_utc_us(4102444800LL * 1000000));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_idle_allows_everything_but_stop);
@@ -106,5 +124,7 @@ int main() {
     RUN_TEST(test_status_recording_and_compressing);
     RUN_TEST(test_recording_entry);
     RUN_TEST(test_busy_body);
+    RUN_TEST(test_error_body);
+    RUN_TEST(test_plausible_utc);
     return UNITY_END();
 }

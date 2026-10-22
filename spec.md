@@ -434,11 +434,39 @@ Every other request returns **`409 Conflict`** with `{"error": "busy", "state": 
 includes settings changes, since NVS writes go to flash. The app retries once the state returns
 to `idle`.
 
+#### Response Formats
+
+All JSON bodies are objects. Shapes for the endpoints whose output isn't obvious from the table:
+
+| Endpoint | Success response |
+| :--- | :--- |
+| `POST /api/record` | `200` `{"id": 42, "duration_s": 30, "sample_rate_hz": 10000}` |
+| `POST /api/record/stop` | `200` `{"id": 42}` |
+| `GET /api/recordings` | `200` `{"recordings": [<entry>, …]}` in ascending ID order; each entry is `{"id", "start_utc_us", "duration_ms", "sample_rate_mhz", "sample_count", "size_bytes", "compressed"}` |
+| `GET /api/recordings/{id}` | `200` `application/octet-stream` (chunked), `Content-Disposition: attachment; filename="00042.irec"` |
+| `DELETE /api/recordings/{id}` | `200` `{"deleted": 1}` |
+| `DELETE /api/recordings` | `200` `{"deleted": <count>}` |
+| `POST /api/time` | `200` `{"utc_us": <device time after the update>}` |
+| `GET` / `POST /api/settings` | `200` the full settings object: `{"brightness": "low"\|"medium"\|"high", "screen_timeout_s": 30\|60\|300\|0, "default_sample_rate_hz": …, "default_duration_s": 5\|10\|30\|60}` (`0` = never). `POST` accepts any subset of these keys and applies all or nothing. |
+| `POST /api/compress` | `200` `{"queued": <count>}` — progress via `/api/status` |
+
+Errors use `{"error": "<code>"}`, plus `"field"` for settings errors:
+
+| Status | Codes |
+| :--- | :--- |
+| `400` | `invalid_body`, `invalid_json`, `invalid_rate`, `invalid_duration`, `invalid_time`, `invalid_setting` (+ `field`), `unknown_setting` (+ `field`), `confirmation_required` |
+| `404` | `not_found` |
+| `409` | `busy` (+ `state`) |
+| `500` | `storage_error` |
+| `503` | `calibration_unavailable` (chip has no eFuse calibration) |
+| `507` | `insufficient_space` |
+
 #### Long-Running Operations
 
-- Compression and delete-all run in a low-priority background task that works in chunks and
-  yields between them, so the task watchdog is never starved. Progress is reported via
-  `GET /api/status`.
+- Compression runs in a low-priority background task that works in chunks and yields between
+  them, so the task watchdog is never starved. Progress is reported via `GET /api/status`.
+- Delete-all runs within the request: deleting a file only updates LittleFS metadata, so even
+  ~250 files take well under a few seconds.
 - Recording downloads are streamed in 4 KB chunks (`httpd_resp_send_chunk`).
 
 #### Polling Pattern (App Side)

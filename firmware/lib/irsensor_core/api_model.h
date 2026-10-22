@@ -57,4 +57,10 @@ void write_recording(JsonWriter& w, uint32_t id, const irec::Header& h, uint64_t
 // {"error": "...", "state": "..."} body for 409 responses
 void write_busy(JsonWriter& w, DeviceState s);
 
+// {"error": "<code>"} body for other error responses; adds "field" when given.
+void write_error(JsonWriter& w, const char* code, const char* field = nullptr);
+
+// POST /api/time sanity check: between 2024-01-01 and 2100-01-01 UTC.
+bool is_plausible_utc_us(int64_t utc_us);
+
 }  // namespace api

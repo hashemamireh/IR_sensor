@@ -3,7 +3,11 @@
  *
  * Brings up each subsystem per spec.md §9 and starts the FreeRTOS tasks.
  * Subsystem code lives in its own module:
- *   storage  — LittleFS recording storage
+ *   device_state   — idle/recording/… state + lock for flash work
+ *   storage        — LittleFS mount
+ *   settings_store — user settings in NVS
+ *   recordings     — recording files: index, list, delete, IDs
+ *   calibration    — ADC raw → mV (eFuse curve fitting)
  *   battery  — MAX17043 fuel gauge
  *   led      — WS2812B status LED
  *   encoder  — rotary encoder + button
@@ -21,8 +25,12 @@
 #include "config.h"
 #include "api.h"
 #include "battery.h"
+#include "calibration.h"
+#include "device_state.h"
 #include "encoder.h"
 #include "led.h"
+#include "recordings.h"
+#include "settings_store.h"
 #include "storage.h"
 #include "wifi_ap.h"
 
@@ -72,8 +80,12 @@ static void task_ui(void* arg) {
 extern "C" void app_main() {
     ESP_LOGI(TAG, "=== IR Sensor Device starting ===");
 
+    device_state_init();
     init_nvs();
     storage_init();
+    settings_store_init();
+    recordings_init();
+    calibration_init();
     i2c_master_bus_handle_t i2c_bus = init_i2c();
     battery_init(i2c_bus);
     led_init();

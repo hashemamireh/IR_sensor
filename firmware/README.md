@@ -58,12 +58,16 @@ firmware/
 │   └── pins.h                  # GPIO / I2C / ADC pin assignments
 └── src/
     ├── main.cpp                # Entry point — initializes all subsystems & tasks
-    ├── api.cpp/.h              # HTTP REST API
+    ├── api.cpp/.h              # HTTP REST API (all endpoints, 409 gating)
     ├── battery.cpp/.h          # MAX17043 fuel gauge + monitor task
+    ├── calibration.cpp/.h      # ADC raw → mV (eFuse curve fitting)
+    ├── device_state.cpp/.h     # idle/recording/… state + lock for flash work
     ├── encoder.cpp/.h          # Rotary encoder + button
     ├── led.cpp/.h              # WS2812B status LED
+    ├── recordings.cpp/.h       # Recording files: index, list, delete, ID counter
+    ├── settings_store.cpp/.h   # User settings in NVS
     ├── storage.cpp/.h          # LittleFS mount + usage info
-    ├── wifi_ap.cpp/.h          # WiFi SoftAP
+    ├── wifi_ap.cpp/.h          # WiFi SoftAP, generated password, client events
     ├── idf_component.yml       # ESP-IDF component dependencies
     └── CMakeLists.txt          # Source list for ESP-IDF build
 ├── lib/irsensor_core/          # Hardware-independent logic (no ESP-IDF includes)
@@ -113,9 +117,15 @@ The device runs as a **WiFi SoftAP** (`IRSensor-XXXX`). The companion app connec
 | `GET` | `/api/recordings` | List all recordings |
 | `GET` | `/api/recordings/{id}` | Download recording (IREC binary) |
 | `DELETE` | `/api/recordings/{id}` | Delete a recording |
+| `DELETE` | `/api/recordings` | Delete all (body `{"confirm":"DELETE_ALL"}`) |
 | `POST` | `/api/time` | Sync clock from tablet |
 | `POST` | `/api/compress` | Compress all saved recordings |
 | `GET/POST` | `/api/settings` | Read/write device settings |
+| `GET` | `/api/calibration` | Raw → mV lookup table |
+
+Response and error formats are in [`spec.md`](../spec.md) §8.2. Not implemented yet: `/api/record`, `/api/record/stop`, `/api/compress`.
+
+The SoftAP password is generated on first boot, stored in NVS, and printed to the serial log (the OLED will show it once the UI exists).
 
 ### Recording Format (IREC)
 
