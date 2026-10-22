@@ -57,7 +57,7 @@ Build a battery-powered, handheld IR sensor recording device that:
 | :--- | :--- |
 | ADC unit | ADC1 (single unit on ESP32-C5, 6 channels) |
 | Resolution | 12-bit (0–4095) |
-| Attenuation | 6 dB recommended (range ~0–2.2 V, matching OPT101 output ceiling) |
+| Attenuation | 6 dB (nominal full scale ~2.2 V, matching the OPT101 output ceiling). **To verify on hardware**: newer ESP32 C-series datasheets give a smaller accurate range at 6 dB (≈ 1.3 V on the C3); if readings go non-linear above that, switch to 12 dB — see `firmware/BRINGUP.md` §2.1 |
 | Sampling mode | **Continuous mode with DMA** (GDMA controller) |
 | Configurable rates | 1 kHz, 5 kHz, **10 kHz** (default), 20 kHz (nominal — see §3.5) |
 | Channel during recording | OPT101 channel only |

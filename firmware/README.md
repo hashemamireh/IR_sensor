@@ -5,7 +5,7 @@ ESP-IDF firmware for a battery-powered, handheld IR sensor recorder built on the
 Captures analog readings from an **OPT101 photodiode** (with IR bandpass filter) at up to **10 kHz** via DMA, stores recordings to on-chip flash, and serves them over WiFi to a companion tablet app.
 
 > [!IMPORTANT]
-> This firmware was written and cross-compiled without access to the physical board. It builds cleanly for ESP32-C5 but has **not been flashed or tested on hardware**. Expect pin/peripheral issues on first boot.
+> This firmware was written and cross-compiled without access to the physical board. It builds cleanly for ESP32-C5 but has **not been flashed or tested on hardware**. Expect pin/peripheral issues on first boot — work through [`BRINGUP.md`](BRINGUP.md), the step-by-step bring-up checklist.
 
 ## Hardware
 
@@ -106,7 +106,10 @@ firmware/
 │   ├── button.*                # Debounced short/long press detection
 │   └── led_color.*             # Status LED colour scheme (spec §6.3)
 ├── test/                       # Host-side Unity tests for lib/irsensor_core
-└── tools/oled_preview.py       # Renders the menu tests' screens to a PNG
+├── tools/
+│   ├── check_irec.py           # Verifies a downloaded recording: header, CRC, pulse timing
+│   └── oled_preview.py         # Renders the menu tests' screens to a PNG
+└── BRINGUP.md                  # Board bring-up checklist
 ```
 
 Code in `lib/irsensor_core` must not include ESP-IDF headers, so it keeps building for the `native` test environment.
