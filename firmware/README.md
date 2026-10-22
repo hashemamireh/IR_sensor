@@ -80,10 +80,12 @@ firmware/
     ├── api.cpp/.h              # HTTP REST API (all endpoints, 409 gating)
     ├── battery.cpp/.h          # MAX17043 fuel gauge + monitor task
     ├── calibration.cpp/.h      # ADC raw → mV (eFuse curve fitting)
+    ├── compressor.cpp/.h       # Compress All background job (ROM miniz, verified)
     ├── device_state.cpp/.h     # idle/recording/… state + lock for flash work
     ├── display.cpp/.h          # SSD1306 OLED via esp_lcd
     ├── encoder.cpp/.h          # Rotary encoder (PCNT) + raw button
     ├── led.cpp/.h              # WS2812B status LED
+    ├── power.cpp/.h            # Deep sleep + 2 s-hold wake
     ├── recorder.cpp/.h         # ADC continuous capture → PSRAM → IREC file
     ├── recordings.cpp/.h       # Recording files: index, list, delete, ID counter
     ├── settings_store.cpp/.h   # User settings in NVS
@@ -148,10 +150,11 @@ The device runs as a **WiFi SoftAP** (`IRSensor-XXXX`). The companion app connec
 | `DELETE` | `/api/recordings` | Delete all (body `{"confirm":"DELETE_ALL"}`) |
 | `POST` | `/api/time` | Sync clock from tablet |
 | `POST` | `/api/compress` | Compress all saved recordings |
+| `POST` | `/api/sleep` | Enter deep sleep |
 | `GET/POST` | `/api/settings` | Read/write device settings |
 | `GET` | `/api/calibration` | Raw → mV lookup table |
 
-Response and error formats are in [`spec.md`](../spec.md) §8.2. Not implemented yet: `/api/compress`.
+Response and error formats are in [`spec.md`](../spec.md) §8.2.
 
 The SoftAP password is generated on first boot, stored in NVS, and printed to the serial log (the OLED will show it once the UI exists).
 

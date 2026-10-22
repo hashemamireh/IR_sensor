@@ -7,6 +7,7 @@
 
 #include "battery.h"
 #include "button.h"
+#include "compressor.h"
 #include "config.h"
 #include "device_state.h"
 #include "display.h"
@@ -14,6 +15,7 @@
 #include "led.h"
 #include "led_color.h"
 #include "menu.h"
+#include "power.h"
 #include "recorder.h"
 #include "recordings.h"
 #include "settings_store.h"
@@ -46,6 +48,7 @@ public:
         s.elapsed_s        = p.elapsed_s;
         s.total_s          = p.total_s;
         s.rate_hz          = p.rate_hz;
+        compressor_progress(&s.compress_done, &s.compress_total);
         return s;
     }
 
@@ -93,8 +96,8 @@ public:
         return static_cast<int>(recordings_delete_all());
     }
 
-    bool compress_all() override { return false; }  // ponytail: compression job (step 6)
-    bool deep_sleep() override { return false; }    // ponytail: deep sleep (step 6)
+    int  compress_all() override { return compressor_start(); }
+    bool deep_sleep() override { return power_deep_sleep(); }
 
     bool set_wifi_enabled(bool on) override { return wifi_ap_set_enabled(on) == ESP_OK; }
 };

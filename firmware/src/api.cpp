@@ -12,9 +12,11 @@
 #include "api_model.h"
 #include "battery.h"
 #include "calibration.h"
+#include "compressor.h"
 #include "config.h"
 #include "device_state.h"
 #include "json_writer.h"
+#include "power.h"
 #include "recorder.h"
 #include "recording.h"
 #include "recordings.h"
@@ -135,7 +137,9 @@ static esp_err_t handle_status(httpd_req_t* req) {
         s.elapsed_s    = p.elapsed_s;
         s.total_s      = p.total_s;
     }
-    // ponytail: compress progress is filled in by the compression job (step 6)
+    if (s.state == api::DeviceState::Compressing) {
+        compressor_progress(&s.compress_done, &s.compress_total);
+    }
 
     char buf[320];
     JsonWriter w(buf, sizeof(buf));
@@ -387,6 +391,34 @@ static esp_err_t handle_settings_set(httpd_req_t* req) {
     return send_settings(req, s);
 }
 
+// ── POST /api/compress ──────────────────────────────────────────────────────
+
+static esp_err_t handle_compress(httpd_req_t* req) {
+    if (!api::route_allowed(device_state(), Route::Compress)) return send_busy(req);
+
+    int queued = compressor_start();
+    if (queued == COMPRESS_BUSY) return send_busy(req);
+    if (queued < 0) return send_error(req, "500 Internal Server Error", "storage_error");
+
+    char buf[32];
+    JsonWriter w(buf, sizeof(buf));
+    w.begin_object().key("queued").num(queued).end_object();
+    return send_json(req, "200 OK", w);
+}
+
+// ── POST /api/sleep ─────────────────────────────────────────────────────────
+
+static esp_err_t handle_sleep(httpd_req_t* req) {
+    if (!api::route_allowed(device_state(), Route::Sleep)) return send_busy(req);
+
+    char buf[32];
+    JsonWriter w(buf, sizeof(buf));
+    w.begin_object().key("sleeping").boolean(true).end_object();
+    esp_err_t err = send_json(req, "200 OK", w);
+    power_deep_sleep_later(500);  // after the response has gone out
+    return err;
+}
+
 // ── GET /api/calibration ────────────────────────────────────────────────────
 
 static esp_err_t handle_calibration(httpd_req_t* req) {
@@ -431,7 +463,6 @@ void api_start() {
         return;
     }
 
-    // ponytail: POST /api/compress is registered with the compression job (step 6)
     const httpd_uri_t routes[] = {
         {.uri = "/api/status",       .method = HTTP_GET,    .handler = handle_status,                .user_ctx = nullptr},
         {.uri = "/api/record",       .method = HTTP_POST,   .handler = handle_record_start,          .user_ctx = nullptr},
@@ -444,6 +475,8 @@ void api_start() {
         {.uri = "/api/settings",     .method = HTTP_GET,    .handler = handle_settings_get,          .user_ctx = nullptr},
         {.uri = "/api/settings",     .method = HTTP_POST,   .handler = handle_settings_set,          .user_ctx = nullptr},
         {.uri = "/api/calibration",  .method = HTTP_GET,    .handler = handle_calibration,           .user_ctx = nullptr},
+        {.uri = "/api/compress",     .method = HTTP_POST,   .handler = handle_compress,              .user_ctx = nullptr},
+        {.uri = "/api/sleep",        .method = HTTP_POST,   .handler = handle_sleep,                 .user_ctx = nullptr},
     };
     for (const auto& r : routes) {
         ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &r));

@@ -69,9 +69,15 @@ struct FakeDevice : ui::Device {
         return false;
     }
     int  delete_all() override { int n = recs.size(); recs.clear(); return n; }
-    bool compress_all() override { return false; }
+    int  compress_all() override {
+        if (st.state != DeviceState::Idle) return -1;
+        st.state = DeviceState::Compressing;
+        st.compress_total = recs.size();
+        return recs.size();
+    }
     bool set_wifi_enabled(bool on) override { st.wifi_enabled = on; return true; }
-    bool deep_sleep() override { return false; }
+    bool deep_sleep() override { sleeps++; return false; }  // the real one only returns when busy
+    int  sleeps = 0;
 };
 
 // Writes the rendered screen as ASCII art when UI_PREVIEW_DIR is set
@@ -243,6 +249,39 @@ static void test_status_bar_shows_connection() {
     TEST_ASSERT_FALSE(fb.pixel(112, 4));
 }
 
+static void test_compress_all_shows_progress_on_home() {
+    FakeDevice dev;
+    Menu m(dev);
+    press(m);
+    right(m, 3);
+    press(m);           // Storage
+    TEST_ASSERT_EQUAL_STRING("Storage", m.title().c_str());
+    preview(m, "12_storage");
+    right(m, 2);
+    press(m);           // Compress All
+    right(m);
+    press(m);           // Yes
+    TEST_ASSERT_TRUE(dev.st.state == DeviceState::Compressing);
+    dev.st.compress_done = 1;
+    m.tick();
+    preview(m, "13_compressing");
+    press(m);
+    TEST_ASSERT_EQUAL_STRING("Menu", m.title().c_str());  // was on home
+}
+
+static void test_deep_sleep_refused_shows_message() {
+    FakeDevice dev;
+    Menu m(dev);
+    press(m);
+    right(m, 5);
+    press(m);           // Deep Sleep
+    TEST_ASSERT_EQUAL_STRING("Deep sleep?", m.title().c_str());
+    right(m);
+    press(m);           // Yes
+    TEST_ASSERT_EQUAL_INT(1, dev.sleeps);
+    TEST_ASSERT_EQUAL_STRING("Device busy", m.title().c_str());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_home_menu_and_back);
@@ -254,5 +293,7 @@ int main() {
     RUN_TEST(test_settings_change_is_saved);
     RUN_TEST(test_wifi_info_and_toggle);
     RUN_TEST(test_status_bar_shows_connection);
+    RUN_TEST(test_compress_all_shows_progress_on_home);
+    RUN_TEST(test_deep_sleep_refused_shows_message);
     return UNITY_END();
 }

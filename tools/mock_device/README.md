@@ -33,6 +33,7 @@ Then poll `http://127.0.0.1:8080/api/status`.
 | `--overrun-every N` | Mark every Nth recording ID as overrun: flags bit 1 is set, `"overrun": true` appears in the list, and 1–3 gaps of about 50 ms of samples are dropped. Use it to exercise the app's overrun warning. |
 | `--unsynced-clock` | Start the device clock at the Unix epoch, as after a full power loss, until `POST /api/time` is called. By default the mock uses the host clock. |
 | `--no-calibration` | Answer `GET /api/calibration` with `503 calibration_unavailable`, like a chip without eFuse calibration data. |
+| `--wake-after S` | After `POST /api/sleep`, wake again after S seconds of real time. By default the mock stays asleep until it gets `SIGUSR1` or is restarted. |
 | `--no-cors` | Leave out the `Access-Control-Allow-Origin: *` header. |
 | `--quiet` | Don't log requests. |
 
@@ -63,6 +64,9 @@ The tests run with a 10× time scale and take about 10 s. They cover:
 - the response shapes and error codes in §8.2 "Response Formats", and the body
   parsing rules of `api.cpp`
 - overrun recordings
+- compression skipping files that don't shrink
+- deep sleep: 409 while busy, unreachable while asleep, waking by call and by
+  `wake_after`
 - IDs never reused
 - time sync, settings, calibration and persistence
 
@@ -76,6 +80,16 @@ The tests run with a 10× time scale and take about 10 s. They cover:
   state is then `saving` for about 1 s, plus about 1 s per 6 MB, and then `idle`.
 - `POST /api/compress` moves `idle` to `compressing`. Status reports
   `compress.done`/`total`. Each file takes about 0.5 s plus about 1 s per MB.
+  With nothing to compress it returns `{"queued": 0}` and stays `idle`.
+- A recording that doesn't get smaller is left uncompressed, with its flag unset.
+  As in `compressor.cpp`, it's queued again on the next compress run.
+- `POST /api/sleep` (idle only) answers `{"sleeping": true}`. About 0.5 s later the
+  device "sleeps": the listening socket closes, so new connections are refused,
+  and kept-alive connections are dropped without a reply. That is how the app
+  sees WiFi go away. It wakes on `SIGUSR1` (`kill -USR1 <pid>`, the pid is in the
+  startup line), after `--wake-after S`, or on a restart, back on the same port.
+  Recordings, settings and the clock survive sleep, as they do on the device
+  (flash, NVS, RTC).
 
 **Recordings.** These are valid IREC v1 files:
 
@@ -146,8 +160,9 @@ each one, and the spec should record the decision.
    non-idle states. `api::route_allowed` allows stop only while recording, so when
    idle the mock answers `409 {"error":"busy","state":"idle"}`. The same applies
    while saving or compressing.
-3. **`POST /api/compress` with nothing to compress.** The mock returns
-   `{"queued": 0}` and stays `idle`.
+3. **Time between `POST /api/sleep` and sleeping.** Requests in the ~0.5 s before
+   the device sleeps are still served. If one of them starts a recording, the
+   mock cancels the sleep. The spec doesn't say what the firmware does.
 4. **When the recording ID is allocated.** The status shows `recording.id` during
    capture, so the ID is taken from the counter at start. A recording that never
    gets saved would leave a gap, which §4.6 allows.

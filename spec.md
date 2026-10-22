@@ -171,8 +171,11 @@ Data payload:
   insufficient, recording is **refused with a warning** (displayed on OLED and returned to the
   app).
 - **Compression**: Optional. A manual "Compress All Saved" action is available from the device
-  menu. Compression uses zlib on stored files. The app handles both compressed and uncompressed
-  files transparently (checks the flags byte in the header).
+  menu (and `POST /api/compress`). Compression uses zlib (the ESP32-C5 ROM's miniz) on stored
+  files, in a lowest-priority background task; the device reports `state: "compressing"` with
+  progress. Each compressed copy is decompressed and CRC-checked before it replaces the
+  original, and a recording that doesn't get smaller is left uncompressed. The app handles both
+  compressed and uncompressed files transparently (checks the flags byte in the header).
 
 ### 4.5. Data Integrity
 
@@ -360,14 +363,23 @@ From the **Status Screen** (shown on wake), a **short press** opens the **Main M
 
 ### 7.1. Deep Sleep
 
-- **Entry**: Via the device menu ("Deep Sleep" → confirm) or via app command.
+- **Entry**: Via the device menu ("Deep Sleep" → confirm) or `POST /api/sleep` — only while
+  idle. The OLED and LED are turned off and WiFi is stopped first; the firmware waits for the
+  button to be released so it doesn't wake straight away.
 - **Wake source**: Long press (~2 seconds) on the rotary encoder button. The button GPIO (an LP
   GPIO, pull-up held during sleep) is configured as a deep-sleep wake source; any press wakes the
   chip. On boot the firmware times the press: if the button is released before ~2 s, the device
   goes straight back to deep sleep. This avoids a separate LP-core (ULP) program at the cost of a
   brief wake on accidental presses.
-- **Power draw**: Deep sleep with GPIO wake ≈ 10–30 µA (depending on peripherals left
-  active).
+- **Power draw**: the ESP32-C5 itself is ≈ 10–30 µA with GPIO wake (the button's internal pull-up
+  keeps the RTC peripheral domain on), but everything on the 3V3 rail stays powered:
+  - OPT101: **≈ 120 µA** quiescent (datasheet, dark; 220 µA at full output)
+  - MAX17043: ≈ 50 µA (it has a < 1 µA sleep mode, unused so far)
+  - OLED in display-off mode: a few µA
+  - Board-level parts (regulator quiescent current, any power LED) — measure on hardware
+
+  So expect ≈ 200 µA unless the OPT101 is powered from a GPIO (it needs < 1 mA) and switched off
+  in sleep.
 
 ### 7.2. Screen Power Saving
 
@@ -427,6 +439,7 @@ needed — the simplicity of stateless REST is preferred on a single-core MCU wi
 | `POST` | `/api/time` | Sync time from tablet. Body: `{"utc_us": <microseconds since epoch>}` |
 | `POST` | `/api/compress` | Trigger compression of all uncompressed recordings |
 | `POST` | `/api/settings` | Update device settings. Body: JSON of setting key-values |
+| `POST` | `/api/sleep` | Enter deep sleep (§7.1). Responds first, then sleeps ~0.5 s later; WiFi goes down with it |
 | `GET` | `/api/settings` | Read current device settings |
 | `GET` | `/api/calibration` | Raw → mV lookup table for the OPT101 channel: `{"attenuation_db": 6, "mv": [<4096 integers>]}` (§3.4) |
 
@@ -457,7 +470,8 @@ All JSON bodies are objects. Shapes for the endpoints whose output isn't obvious
 | `DELETE /api/recordings` | `200` `{"deleted": <count>}` |
 | `POST /api/time` | `200` `{"utc_us": <device time after the update>}` |
 | `GET` / `POST /api/settings` | `200` the full settings object: `{"brightness": "low"\|"medium"\|"high", "screen_timeout_s": 30\|60\|300\|0, "default_sample_rate_hz": …, "default_duration_s": 5\|10\|30\|60}` (`0` = never). `POST` accepts any subset of these keys and applies all or nothing. |
-| `POST /api/compress` | `200` `{"queued": <count>}` — progress via `/api/status` |
+| `POST /api/compress` | `200` `{"queued": <count>}` — progress via `/api/status`; `0` means nothing to compress (state stays `idle`) |
+| `POST /api/sleep` | `200` `{"sleeping": true}` |
 
 Errors use `{"error": "<code>"}`, plus `"field"` for settings errors:
 
@@ -472,7 +486,7 @@ Errors use `{"error": "<code>"}`, plus `"field"` for settings errors:
 
 #### Long-Running Operations
 
-- Compression runs in a low-priority background task that works in chunks and yields between
+- Compression runs in a lowest-priority background task that works in chunks and yields between
   them, so the task watchdog is never starved. Progress is reported via `GET /api/status`.
 - Delete-all runs within the request: deleting a file only updates LittleFS metadata, so even
   ~250 files take well under a few seconds.
@@ -539,7 +553,7 @@ While connected:
 | :--- | :--- | :--- |
 | **Recorder** (capture) | Highest (18) | Pull samples from DMA buffers → PSRAM recording buffer. Runs only during active recording. |
 | **Recorder** (save) | Below HTTP (4) | After capture stops: compute CRC, write header + samples to LittleFS. Same task, priority lowered so `GET /api/status` stays responsive while saving. |
-| **Background Jobs** | Low | Compression and delete-all, in yielding chunks. |
+| **Compressor** | Lowest (1) | Compress All, in yielding chunks. |
 | **WiFi / HTTP** | Medium | Handle REST API requests. Yield-friendly. |
 | **UI Task** | Low | OLED rendering, rotary encoder polling, LED updates. Suspended during recording (except LED). |
 | **Battery Monitor** | Lowest | Periodic MAX17043 I2C reads (voltage + SoC%). Deferred during recording to minimize I2C bus activity. |

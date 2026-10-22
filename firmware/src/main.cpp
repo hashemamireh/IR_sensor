@@ -10,6 +10,8 @@
  *   calibration    — ADC raw → mV (eFuse curve fitting)
  *   recorder       — ADC capture → PSRAM → IREC file
  *   ui             — OLED menu, encoder, status LED (display, encoder, led)
+ *   compressor     — Compress All background job
+ *   power          — deep sleep and 2 s-hold wake
  *   battery  — MAX17043 fuel gauge
  *   led      — WS2812B status LED
  *   encoder  — rotary encoder + button
@@ -28,9 +30,11 @@
 #include "api.h"
 #include "battery.h"
 #include "calibration.h"
+#include "compressor.h"
 #include "device_state.h"
 #include "encoder.h"
 #include "led.h"
+#include "power.h"
 #include "recorder.h"
 #include "recordings.h"
 #include "settings_store.h"
@@ -73,6 +77,9 @@ static i2c_master_bus_handle_t init_i2c() {
 // ── app_main ────────────────────────────────────────────────────────────────
 
 extern "C" void app_main() {
+    // Before anything else: a short accidental press goes straight back to sleep
+    power_check_wake();
+
     ESP_LOGI(TAG, "=== IR Sensor Device starting ===");
 
     device_state_init();
@@ -87,6 +94,7 @@ extern "C" void app_main() {
     encoder_init();
     wifi_ap_init();  // before the ADC is used: its password generator borrows the ADC
     recorder_init();
+    compressor_init();
     api_start();
 
     // Task priorities per spec §9.3 (single-core, so priorities matter);

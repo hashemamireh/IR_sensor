@@ -172,16 +172,6 @@ static Capture capture(const Job& job) {
 
 // ── Save ────────────────────────────────────────────────────────────────────
 
-static bool write_all(int fd, const uint8_t* data, size_t len) {
-    while (len > 0) {
-        ssize_t n = write(fd, data, len);
-        if (n <= 0) return false;
-        data += n;
-        len  -= n;
-    }
-    return true;
-}
-
 // Writes the IREC file to a temp path, then renames it into place (spec §9.4)
 static bool save(const Job& job, uint64_t start_utc_us, const Capture& c) {
     if (c.count == 0) {
@@ -212,11 +202,11 @@ static bool save(const Job& job, uint64_t start_utc_us, const Capture& c) {
         return false;
     }
 
-    bool ok = write_all(fd, header, sizeof(header));
+    bool ok = storage_write_all(fd, header, sizeof(header));
     for (size_t off = 0; ok && off < data_bytes; off += SAVE_CHUNK_BYTES) {
         size_t n = std::min<size_t>(SAVE_CHUNK_BYTES, data_bytes - off);
         memcpy(staging, data + off, n);
-        ok = write_all(fd, staging, n);
+        ok = storage_write_all(fd, staging, n);
         vTaskDelay(1);  // let the idle task run — a 6 MB save takes several seconds
     }
     ok = (close(fd) == 0) && ok;

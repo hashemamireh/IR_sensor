@@ -27,14 +27,13 @@ class MockDeviceTest(unittest.TestCase):
         self.start_server(server.Device(time_scale=TIME_SCALE))
 
     def tearDown(self):
-        self.httpd.shutdown()
-        self.httpd.server_close()
+        self.server.stop()
 
-    def start_server(self, device):
+    def start_server(self, device, **kw):
         self.device = device
-        self.httpd = server.make_server("127.0.0.1", 0, device, quiet=True)
-        self.base = "http://127.0.0.1:%d" % self.httpd.server_address[1]
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.server = server.DeviceServer(device, "127.0.0.1", 0, quiet=True, **kw)
+        self.server.start()
+        self.base = "http://127.0.0.1:%d" % self.server.port
 
     def request(self, method, path, body=None, raw=False):
         """Returns (status code, parsed JSON or raw bytes)."""
@@ -174,6 +173,7 @@ class MockDeviceTest(unittest.TestCase):
             ("POST", "/api/compress", None),
             ("POST", "/api/settings", {"brightness": "low"}),
             ("GET", "/api/calibration", None),
+            ("POST", "/api/sleep", None),
         ]:
             self.assertEqual(self.request(method, path, body), (409, busy), path)
 
@@ -304,6 +304,53 @@ class MockDeviceTest(unittest.TestCase):
         self.wait_idle()
         return self.record(**kw)
 
+    def test_compress_skips_files_that_dont_shrink(self):
+        # white noise in both bytes of each sample won't compress
+        payload = os.urandom(20000)
+        noise = server.encode_header(1000000, 10000, 0, zlib.crc32(payload), 0) + payload
+        self.assertIs(server.compress_irec(noise), noise)
+
+        self.device.seed(1)
+        with self.device.lock:
+            self.device.recordings[2] = noise
+        self.assertEqual(self.request("POST", "/api/compress"), (200, {"queued": 2}))
+        self.wait_idle()
+        flags = {r["id"]: r["compressed"] for r in self.recordings()}
+        self.assertEqual(flags, {1: True, 2: False})
+        self.assertEqual(self.request("GET", "/api/recordings/2", raw=True)[1], noise)
+
+    # -- deep sleep
+
+    def test_sleep_drops_off_the_network_until_woken(self):
+        self.record(duration_s=60)
+        self.assertEqual(self.request("POST", "/api/sleep"),
+                         (409, {"error": "busy", "state": "recording"}))
+        self.request("POST", "/api/record/stop")
+        self.wait_idle()
+
+        self.assertEqual(self.request("POST", "/api/sleep"), (200, {"sleeping": True}))
+        deadline = time.monotonic() + 5
+        while not self.device.asleep and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(self.device.asleep)
+        time.sleep(0.05)
+        with self.assertRaises(OSError):  # refused or reset
+            self.request("GET", "/api/status")
+
+        self.server.wake()
+        code, status = self.request("GET", "/api/status")
+        self.assertEqual((code, status["state"], status["recording_count"]), (200, "idle", 1))
+
+    def test_sleep_wake_after(self):
+        self.tearDown()
+        self.start_server(self.device, wake_after=0.3)
+        self.assertEqual(self.request("POST", "/api/sleep")[0], 200)
+        time.sleep(0.5 / TIME_SCALE + 0.1)
+        with self.assertRaises(OSError):  # refused or reset
+            self.request("GET", "/api/status")
+        time.sleep(0.4)
+        self.assertEqual(self.request("GET", "/api/status")[0], 200)
+
     # -- time, settings, calibration
 
     def test_time_sync(self):
@@ -351,10 +398,7 @@ class MockDeviceTest(unittest.TestCase):
 
     def test_calibration_unavailable(self):
         self.tearDown()
-        self.httpd = server.make_server("127.0.0.1", 0, self.device, quiet=True,
-                                        calibration=False)
-        self.base = "http://127.0.0.1:%d" % self.httpd.server_address[1]
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.start_server(self.device, calibration=False)
         self.assertEqual(self.request("GET", "/api/calibration"),
                          (503, {"error": "calibration_unavailable"}))
 

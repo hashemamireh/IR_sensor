@@ -209,7 +209,7 @@ void Menu::tick() {
             }
             break;
         case api::DeviceState::Compressing:
-            rebuild_top();
+            dirty_ = true;
             break;
     }
 }
@@ -233,7 +233,7 @@ Menu::Screen Menu::main_menu() {
         {"Settings",   [this] { push(settings_menu()); }},
         {"Deep Sleep", [this] {
             push(confirm("Deep sleep?", [this] {
-                if (!dev_.deep_sleep()) message("Not available yet");
+                if (!dev_.deep_sleep()) message("Device busy", {"Try again shortly"});
             }));
         }},
     };
@@ -365,7 +365,11 @@ Menu::Screen Menu::storage_menu() {
             {fmt("Recordings: %u", u(st.recording_count)), nullptr},
             {"Compress All", [this] {
                 push(confirm("Compress all?", [this] {
-                    if (!dev_.compress_all()) message("Not available yet");
+                    int n = dev_.compress_all();
+                    if (n > 0)       reset_home();  // progress is shown there
+                    else if (n == 0) message("Nothing to do", {"All recordings are", "already compressed"});
+                    else if (n == -1) message("Device busy", {"Try again shortly"});
+                    else             message("Not available", {"See serial log"});
                 }));
             }},
             {"Clear All", [this] {
@@ -498,9 +502,11 @@ void Menu::draw_status_bar(Framebuffer& fb, const StatusSnapshot& st) {
 }
 
 void Menu::draw_home(Framebuffer& fb, const StatusSnapshot& st) {
-    const char* state = "Ready";
-    if (st.state == api::DeviceState::Compressing) state = "Compressing...";
-    fb.text(0, 18, state);
+    std::string state = "Ready";
+    if (st.state == api::DeviceState::Compressing) {
+        state = fmt("Compressing %u/%u", u(st.compress_done), u(st.compress_total));
+    }
+    fb.text(0, 18, state.c_str());
 
     recording::Outcome o = dev_.last_outcome();
     std::string line1, line2;

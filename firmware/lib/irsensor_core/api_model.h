@@ -26,6 +26,7 @@ enum class Route {
     SettingsGet,
     SettingsSet,
     Calibration,
+    Sleep,
 };
 
 // §8.2 "Requests During Recording": false means respond 409 Conflict.

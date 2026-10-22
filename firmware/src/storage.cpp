@@ -2,6 +2,8 @@
 
 #include <atomic>
 
+#include <unistd.h>
+
 #include "esp_log.h"
 #include "esp_littlefs.h"
 
@@ -29,6 +31,28 @@ void storage_init() {
 void storage_info(size_t* total_bytes, size_t* used_bytes) {
     *total_bytes = total_cached.load();
     *used_bytes  = used_cached.load();
+}
+
+bool storage_write_all(int fd, const void* data, size_t len) {
+    const uint8_t* p = static_cast<const uint8_t*>(data);
+    while (len > 0) {
+        ssize_t n = write(fd, p, len);
+        if (n <= 0) return false;
+        p   += n;
+        len -= n;
+    }
+    return true;
+}
+
+bool storage_read_all(int fd, void* data, size_t len) {
+    uint8_t* p = static_cast<uint8_t*>(data);
+    while (len > 0) {
+        ssize_t n = read(fd, p, len);
+        if (n <= 0) return false;
+        p   += n;
+        len -= n;
+    }
+    return true;
 }
 
 void storage_refresh() {

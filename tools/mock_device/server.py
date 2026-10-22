@@ -14,6 +14,7 @@ import math
 import os
 import random
 import re
+import signal
 import struct
 import sys
 import threading
@@ -281,13 +282,19 @@ def build_irec(rec_id, rate_mhz, count, start_utc_us, overrun=False):
 
 
 def compress_irec(data):
-    """Sets flag bit 0 and zlib-compresses the payload; the CRC is unchanged."""
+    """Sets flag bit 0 and zlib-compresses the payload; the CRC is unchanged.
+
+    A file that doesn't get smaller is returned unchanged, flag unset (§4.4).
+    """
     h = decode_header(data)
     if h["flags"] & FLAG_COMPRESSED:
         return data
+    packed = zlib.compress(data[HEADER_SIZE:], 6)
+    if len(packed) >= len(data) - HEADER_SIZE:
+        return data
     header = encode_header(h["sample_rate_mhz"], h["sample_count"], h["start_utc_us"],
                            h["crc32"], h["flags"] | FLAG_COMPRESSED)
-    return header + zlib.compress(data[HEADER_SIZE:], 6)
+    return header + packed
 
 
 # --- Device model ----------------------------------------------------------
@@ -329,6 +336,8 @@ class Device:
         self.rec_timer = None
         self.compress_done = 0
         self.compress_total = 0
+        self.asleep = False
+        self.on_sleep = []  # callbacks run when the device falls asleep
 
         if data_dir:
             os.makedirs(data_dir, exist_ok=True)
@@ -495,11 +504,37 @@ class Device:
             if wait > 0:
                 time.sleep(wait)
             with self.lock:
-                self.recordings[rec_id] = packed
-                self._write_file(rec_id, packed)
+                if packed is not data:
+                    self.recordings[rec_id] = packed
+                    self._write_file(rec_id, packed)
                 self.compress_done += 1
         with self.lock:
             self.state = IDLE
+
+    # -- deep sleep (§7.1)
+
+    def request_sleep(self):
+        """POST /api/sleep: the response goes out first, sleep follows ~0.5 s later."""
+        with self.lock:
+            if self.state != IDLE:
+                raise Busy(self.state)
+        t = threading.Timer(0.5 / self.time_scale, self._fall_asleep)
+        t.daemon = True
+        t.start()
+
+    def _fall_asleep(self):
+        with self.lock:
+            if self.state != IDLE or self.asleep:
+                return
+            self.asleep = True
+        for cb in list(self.on_sleep):
+            cb()
+
+    def wake(self):
+        """Long press on the encoder. RAM state is kept: the mock's recordings stand
+        in for flash, and the clock keeps running through deep sleep (§7.3)."""
+        with self.lock:
+            self.asleep = False
 
     # -- settings
 
@@ -606,6 +641,7 @@ ROUTES = {
     ("GET", "/api/settings"): (ROUTE_SETTINGS_GET, "h_settings_get"),
     ("POST", "/api/settings"): ("SettingsSet", "h_settings_set"),
     ("GET", "/api/calibration"): ("Calibration", "h_calibration"),
+    ("POST", "/api/sleep"): ("Sleep", "h_sleep"),
 }
 KNOWN_PATHS = {p for _, p in ROUTES}
 
@@ -658,7 +694,16 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError("invalid_json")
         return body
 
+    def dropped_while_asleep(self):
+        """WiFi is off while asleep: close kept-alive connections without a response."""
+        if self.device.asleep:
+            self.close_connection = True
+            return True
+        return False
+
     def dispatch(self):
+        if self.dropped_while_asleep():
+            return
         length = int(self.headers.get("Content-Length") or 0)
         self.body = self.rfile.read(length) if length else b""
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
@@ -694,6 +739,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         # CORS preflight for browser-based app development
+        if self.dropped_while_asleep():
+            return
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
@@ -776,6 +823,10 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(err[0], field=err[1])
         self.send_json(200, settings)
 
+    def h_sleep(self):
+        self.device.request_sleep()
+        self.send_json(200, {"sleeping": True})
+
     def h_calibration(self):
         if self.server.calibration is None:
             raise ApiError("calibration_unavailable", 503)
@@ -796,6 +847,58 @@ def make_server(host="127.0.0.1", port=8080, device=None, cors=True, quiet=False
     return httpd
 
 
+class DeviceServer:
+    """Runs the HTTP server and takes it down while the device sleeps.
+
+    Asleep, the listening socket is closed (connection refused) and kept-alive
+    connections are dropped. wake() — or wake_after seconds — brings it back on
+    the same port.
+    """
+
+    def __init__(self, device, host="127.0.0.1", port=8080, wake_after=None, **server_kw):
+        self.device = device
+        self.host = host
+        self.port = port
+        self.wake_after = wake_after
+        self.server_kw = server_kw
+        self.httpd = None
+        self.lock = threading.Lock()
+        device.on_sleep.append(self._sleep)
+
+    def start(self):
+        with self.lock:
+            self.httpd = make_server(self.host, self.port, self.device, **self.server_kw)
+            self.port = self.httpd.server_address[1]  # resolve port 0 once, keep it on wake
+            threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def stop(self):
+        with self.lock:
+            if self.httpd:
+                self.httpd.shutdown()
+                self.httpd.server_close()
+                self.httpd = None
+
+    def _sleep(self):
+        self.stop()
+        log("asleep — %s" % ("waking in %g s" % self.wake_after if self.wake_after
+                             else "send SIGUSR1 or restart to wake"))
+        if self.wake_after:
+            t = threading.Timer(self.wake_after, self.wake)
+            t.daemon = True
+            t.start()
+
+    def wake(self):
+        if not self.device.asleep:
+            return
+        self.device.wake()
+        self.start()
+        log("awake on port %d" % self.port)
+
+
+def log(msg):
+    print(time.strftime("[%H:%M:%S] ") + msg, flush=True)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="Mock IR sensor device REST API (spec.md §8.2)")
     p.add_argument("--host", default="127.0.0.1",
@@ -814,6 +917,9 @@ def main(argv=None):
                    help="start the device clock at the epoch until POST /api/time")
     p.add_argument("--no-calibration", action="store_true",
                    help="answer GET /api/calibration with 503, as a chip without eFuse data")
+    p.add_argument("--wake-after", type=float, metavar="S",
+                   help="after POST /api/sleep, wake again after S seconds "
+                        "(default: stay asleep until SIGUSR1 or restart)")
     p.add_argument("--no-cors", action="store_true", help="omit CORS headers")
     p.add_argument("--quiet", action="store_true", help="no request log")
     args = p.parse_args(argv)
@@ -823,16 +929,23 @@ def main(argv=None):
                     overrun_every=args.overrun_every)
     if args.seed:
         device.seed(args.seed)
-    httpd = make_server(args.host, args.port, device, cors=not args.no_cors, quiet=args.quiet,
-                        calibration=not args.no_calibration)
-    print("IR sensor mock on http://%s:%d/api/status (%d recordings)"
-          % (args.host, httpd.server_address[1], len(device.recordings)), flush=True)
+    server = DeviceServer(device, args.host, args.port, wake_after=args.wake_after,
+                          cors=not args.no_cors, quiet=args.quiet,
+                          calibration=not args.no_calibration)
+    server.start()
+    if hasattr(signal, "SIGUSR1"):
+        # Handlers run on the main thread, which mustn't block in httpd.shutdown()
+        signal.signal(signal.SIGUSR1,
+                      lambda *_: threading.Thread(target=server.wake, daemon=True).start())
+    log("IR sensor mock on http://%s:%d/api/status (%d recordings, pid %d)"
+        % (args.host, server.port, len(device.recordings), os.getpid()))
     try:
-        httpd.serve_forever()
+        while True:
+            time.sleep(3600)
     except KeyboardInterrupt:
         pass
     finally:
-        httpd.server_close()
+        server.stop()
 
 
 if __name__ == "__main__":

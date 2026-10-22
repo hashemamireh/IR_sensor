@@ -16,6 +16,14 @@ static constexpr uint32_t SAVE_CHUNK_BYTES = 16 * 1024;   // PSRAM → flash cop
 static constexpr int      RECORDER_CAPTURE_PRIORITY = 18; // above HTTP (5), below the WiFi driver (23)
 static constexpr int      RECORDER_SAVE_PRIORITY    = 4;  // below HTTP so status polls answer while saving
 
+// --- Compression (spec §4.4) ---
+static constexpr int      COMPRESS_PRIORITY = 1;      // lowest: UI and HTTP stay responsive
+static constexpr int      COMPRESS_PROBES   = 128;    // miniz dictionary probes: speed vs ratio
+static constexpr uint32_t COMPRESS_CHUNK_BYTES = 8 * 1024;
+
+// --- Deep sleep (spec §7.1) ---
+static constexpr int64_t  WAKE_HOLD_US = 2000000;     // button hold needed to wake
+
 // --- Battery monitor ---
 static constexpr uint32_t BATTERY_READ_INTERVAL_MS = 30000;  // 30 seconds
 

@@ -26,6 +26,7 @@ static void test_busy_states_allow_only_status_settings_get_and_stop() {
         TEST_ASSERT_FALSE(api::route_allowed(s, Route::SettingsSet));
         TEST_ASSERT_FALSE(api::route_allowed(s, Route::Time));
         TEST_ASSERT_FALSE(api::route_allowed(s, Route::Calibration));
+        TEST_ASSERT_FALSE(api::route_allowed(s, Route::Sleep));
     }
     TEST_ASSERT_TRUE(api::route_allowed(DeviceState::Recording, Route::RecordStop));
     TEST_ASSERT_FALSE(api::route_allowed(DeviceState::Saving, Route::RecordStop));

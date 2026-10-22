@@ -33,6 +33,9 @@ struct StatusSnapshot {
     uint32_t elapsed_s    = 0;
     uint32_t total_s      = 0;
     uint32_t rate_hz      = 0;
+    // While compressing
+    uint32_t compress_done  = 0;
+    uint32_t compress_total = 0;
 };
 
 struct RecordingSummary {
@@ -55,10 +58,10 @@ public:
     virtual recording::StartResult start_recording(uint32_t rate_hz, uint32_t duration_s) = 0;
     virtual void             stop_recording() = 0;
     virtual bool             delete_recording(uint32_t id) = 0;
-    virtual int              delete_all() = 0;  // count deleted, -1 if busy
-    virtual bool             compress_all() = 0;  // false = not available
+    virtual int              delete_all() = 0;    // count deleted, -1 if busy
+    virtual int              compress_all() = 0;  // count queued, -1 if busy, -2 if unavailable
     virtual bool             set_wifi_enabled(bool on) = 0;
-    virtual bool             deep_sleep() = 0;    // false = not available
+    virtual bool             deep_sleep() = 0;    // only returns (false) if busy
 };
 
 class Menu {
