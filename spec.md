@@ -59,7 +59,7 @@ Build a battery-powered, handheld IR sensor recording device that:
 | Resolution | 12-bit (0–4095) |
 | Attenuation | 6 dB recommended (range ~0–2.2 V, matching OPT101 output ceiling) |
 | Sampling mode | **Continuous mode with DMA** (GDMA controller) |
-| Configurable rates | 1 kHz, 5 kHz, **10 kHz** (default), 20 kHz |
+| Configurable rates | 1 kHz, 5 kHz, **10 kHz** (default), 20 kHz (nominal — see §3.5) |
 | Channel during recording | OPT101 channel only |
 
 ### 3.3. DMA Strategy
@@ -69,16 +69,42 @@ The ESP32-C5's GDMA controller offloads ADC sampling entirely to hardware:
 - ADC conversions are triggered automatically at the configured sample rate.
 - Results are deposited into linked-list descriptor buffers in internal SRAM via DMA — **no CPU
   intervention required per sample**.
-- The firmware drains DMA buffers in a high-priority FreeRTOS task, copying data to a PSRAM
-  staging buffer before flushing to flash.
+- The firmware drains DMA buffers in a high-priority FreeRTOS task, converting each 4-byte DMA
+  result (`adc_continuous_parse_data()`) to a `uint16` sample and appending it to a **PSRAM
+  recording buffer that holds the entire recording**.
+- **Nothing is written to flash during a recording.** On the ESP32-C5, flash and PSRAM share the
+  SPI cache, so a flash write/erase stalls PSRAM access. Buffering the whole recording in PSRAM
+  and saving it after capture stops removes that contention entirely (see §4.4 for the resulting
+  duration limits).
+- The ESP-IDF WiFi driver task runs at priority 23 — above all application tasks — and can
+  briefly preempt the drain task on the single core. The internal-SRAM DMA buffers are therefore
+  sized to hold **≥50 ms of samples** at the highest rate (~4 KB at 20 kHz × 4 B/result). The size
+  is a tunable constant so it can be adjusted on hardware.
 - At 10 kHz × 2 bytes/sample = **20 KB/s**, this is trivially within the GDMA's capability
   (hardware supports up to ~250–350 kS/s).
 
 ### 3.4. Calibration
 
-- Use ESP-IDF's **ADC Curve Fitting calibration scheme** (`ADC_CALI_SCHEME_VER_CURVE_FITTING`) to
-  convert raw ADC counts to millivolts.
-- Apply calibration on first boot or when requested via the app.
+- Recordings store **raw ADC counts** (0–4095), not millivolts — full resolution, no per-sample
+  conversion cost.
+- Raw → mV conversion uses ESP-IDF's **ADC Curve Fitting calibration scheme**
+  (`ADC_CALI_SCHEME_VER_CURVE_FITTING`), which is driven by per-chip correction values burned into
+  eFuse at the factory. There is no runtime calibration procedure to run.
+- Because those eFuse values only exist on the chip, the device exposes a **raw → mV lookup
+  table** via `GET /api/calibration` (4096 entries, one per raw count, for the configured
+  attenuation). The app stores this table in each downloaded recording's `.json` sidecar (§10.4),
+  so every recording can be converted to millivolts offline.
+
+### 3.5. Actual Sample Rate
+
+- The ADC controller derives its sample clock from the crystal through integer dividers, so the
+  actual rate can differ slightly from the requested (nominal) rate. Timing is still
+  crystal-accurate (~10–20 ppm); only the label would be wrong — e.g. a true 10 004 Hz labelled as
+  10 000 Hz misplaces an event at 60 s by ~24 ms.
+- Following DAQ practice (record the coerced/actual rate, not the requested one), the **actual
+  rate for each nominal setting is measured on hardware** and stored in firmware as a constant
+  table; recordings store the actual rate in **millihertz** (§4.2).
+- Until measured on hardware, the actual rate is assumed equal to the nominal rate.
 
 ---
 
@@ -101,10 +127,10 @@ Header (32 bytes):
   Offset  Size  Field
   0x00    4B    Magic bytes: "IREC" (0x49 0x52 0x45 0x43)
   0x04    1B    Format version (currently 0x01)
-  0x05    4B    Sample rate in Hz (uint32_le)
+  0x05    4B    Actual sample rate in millihertz (uint32_le), e.g. 10 004.3 Hz → 10004300
   0x09    4B    Sample count (uint32_le)
   0x0D    8B    Start timestamp — UTC microseconds since epoch (uint64_le)
-  0x15    4B    CRC32 of data payload (uint32_le)
+  0x15    4B    CRC-32 of the uncompressed sample data (uint32_le) — see §4.5
   0x19    1B    Flags: bit 0 = compressed (zlib)
   0x1A    6B    Reserved (zero-filled)
 
@@ -122,10 +148,18 @@ Data payload:
 | 60 s | 10 kHz | 1.2 MB | ~20 |
 | 120 s | 10 kHz | 2.4 MB | ~10 |
 | 300 s | 10 kHz | 6 MB | ~4 |
+| 120 s | 20 kHz | 4.8 MB | ~5 |
+
+20 kHz recordings are capped at 120 s (§4.4).
 
 ### 4.4. Recording Constraints
 
-- **Maximum duration**: 300 seconds (5 minutes) hard cap.
+- **Maximum duration**: **300 s** at 1, 5 and 10 kHz; **120 s** at 20 kHz. The whole recording is
+  held in PSRAM until capture ends (§3.3); ~6 MB of PSRAM is reserved for this at boot, and 300 s
+  at 20 kHz (12 MB) would not fit.
+- **Saving**: after capture stops, the PSRAM buffer is written to LittleFS. This takes a few
+  seconds for long recordings; the device reports `state: "saving"` and the OLED shows
+  "Saving…". A recording interrupted by power loss before it is saved is lost.
 - **Pre-recording check**: Before starting, the firmware calculates the required storage
   (`sample_rate × duration × 2 bytes + 32 byte header`) and compares against free space. If
   insufficient, recording is **refused with a warning** (displayed on OLED and returned to the
@@ -136,8 +170,12 @@ Data payload:
 
 ### 4.5. Data Integrity
 
-- Each recording includes a **CRC32** checksum of the data payload, computed at write time and
-  verified on read/transfer.
+- Each recording includes a **CRC-32** checksum (the standard IEEE/zlib polynomial — identical to
+  zlib's `crc32()`) — a 4-byte fingerprint used to detect corruption.
+- The CRC always covers the **uncompressed** `uint16_le[]` sample data, whether or not the file is
+  compressed. The app verifies it after decompressing, so one check covers flash storage,
+  transfer and decompression. Compressing a file does not change its CRC. (The zlib stream also
+  carries its own Adler-32 checksum over the compressed bytes.)
 
 ### 4.6. Recording IDs & Filenames
 
@@ -237,7 +275,9 @@ Shows the current screen context: status screen, menu, or recording feedback.
   A reading is taken immediately before and after each recording session.
 - The **RGB LED** provides visual feedback instead:
   - 🔴 **Red pulsing** = recording in progress
-- After recording completes, the OLED refreshes with the result summary.
+- The menu is locked during recording; a **short press stops the recording** early.
+- After capture ends, the OLED shows "Saving…" while the recording is written to flash, then
+  refreshes with the result summary.
 
 ### 6.3. RGB LED Status Scheme
 
@@ -268,7 +308,7 @@ From the **Status Screen** (shown on wake), a **short press** opens the **Main M
 │
 ├── 🔴 Record
 │   ├── Quick Start (uses last-used duration + sample rate)
-│   ├── Set Duration → [5s │ 10s │ 30s │ 60s │ 120s │ 300s]
+│   ├── Set Duration → [5s │ 10s │ 30s │ 60s │ 120s │ 300s]  (300s hidden at 20 kHz)
 │   └── Set Sample Rate → [1 kHz │ 5 kHz │ 10 kHz │ 20 kHz]
 │
 ├── 📂 Recordings
@@ -368,17 +408,38 @@ needed — the simplicity of stateless REST is preferred on a single-core MCU wi
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
-| `GET` | `/api/status` | Device status: battery (voltage + SoC%), free space, recording count, WiFi info, current state (`idle` / `recording`), and if recording: `{elapsed_s, total_s, recording_id}` |
-| `POST` | `/api/record` | Start recording. Body: `{"duration_s": 30, "sample_rate_hz": 10000}`. Returns error if insufficient space. |
+| `GET` | `/api/status` | Device status: battery (voltage + SoC%), free space, recording count, WiFi info, current state (`idle` / `recording` / `saving` / `compressing`), and if recording: `{elapsed_s, total_s, recording_id}`; if compressing: `{done, total}` |
+| `POST` | `/api/record` | Start recording. Body: `{"duration_s": 30, "sample_rate_hz": 10000}` (nominal rate). Returns error if insufficient space or the duration exceeds the cap for that rate (§4.4). |
 | `POST` | `/api/record/stop` | Stop the current recording early. The partial recording is finalized and saved. |
 | `GET` | `/api/recordings` | List all recordings with metadata (id, timestamp, duration, sample rate, size, compressed flag) |
 | `GET` | `/api/recordings/{id}` | Download a specific recording (binary, IREC format) |
 | `DELETE` | `/api/recordings/{id}` | Delete a specific recording |
-| `DELETE` | `/api/recordings` | Delete all recordings (with confirmation token) |
+| `DELETE` | `/api/recordings` | Delete all recordings. Body must be exactly `{"confirm": "DELETE_ALL"}`; anything else is rejected with `400`. Guards against accidental/buggy requests — the user-facing confirmation is a dialog in the app. |
 | `POST` | `/api/time` | Sync time from tablet. Body: `{"utc_us": <microseconds since epoch>}` |
 | `POST` | `/api/compress` | Trigger compression of all uncompressed recordings |
 | `POST` | `/api/settings` | Update device settings. Body: JSON of setting key-values |
 | `GET` | `/api/settings` | Read current device settings |
+| `GET` | `/api/calibration` | Raw → mV lookup table for the OPT101 channel: `{"attenuation_db": 6, "mv": [<4096 integers>]}` (§3.4) |
+
+#### Requests During Recording
+
+While the device is not `idle` (recording, saving or compressing), only these requests are
+served:
+
+- `GET /api/status`
+- `POST /api/record/stop` (recording only)
+- `GET /api/settings` (served from RAM)
+
+Every other request returns **`409 Conflict`** with `{"error": "busy", "state": "<state>"}`. This
+includes settings changes, since NVS writes go to flash. The app retries once the state returns
+to `idle`.
+
+#### Long-Running Operations
+
+- Compression and delete-all run in a low-priority background task that works in chunks and
+  yields between them, so the task watchdog is never starved. Progress is reported via
+  `GET /api/status`.
+- Recording downloads are streamed in 4 KB chunks (`httpd_resp_send_chunk`).
 
 #### Polling Pattern (App Side)
 
@@ -434,12 +495,14 @@ While connected:
 ### 9.3. FreeRTOS Task Architecture
 
 > **Important**: The ESP32-C5 is a **single-core** RISC-V processor. All tasks share one core.
-> Task priorities and yielding discipline are critical to prevent starvation.
+> Task priorities and yielding discipline are critical to prevent starvation. Note that the
+> ESP-IDF WiFi driver task (priority 23) outranks every application task (see §3.3).
 
 | Task | Priority | Responsibility |
 | :--- | :--- | :--- |
-| **ADC DMA Drain** | Highest | Pull samples from DMA buffers → PSRAM staging buffer. Runs only during active recording. |
-| **Storage Flush** | High | Write staged samples from PSRAM to LittleFS in chunks. Runs during recording. |
+| **ADC DMA Drain** | Highest | Pull samples from DMA buffers → PSRAM recording buffer. Runs only during active recording. |
+| **Recording Save** | High | After capture stops: write the PSRAM recording buffer to LittleFS, compute CRC, write header. |
+| **Background Jobs** | Low | Compression and delete-all, in yielding chunks. |
 | **WiFi / HTTP** | Medium | Handle REST API requests. Yield-friendly. |
 | **UI Task** | Low | OLED rendering, rotary encoder polling, LED updates. Suspended during recording (except LED). |
 | **Battery Monitor** | Lowest | Periodic MAX17043 I2C reads (voltage + SoC%). Deferred during recording to minimize I2C bus activity. |
@@ -449,26 +512,25 @@ While connected:
 
 ```
 1. Record command received (from app or device menu)
-2. Validate: sufficient free space? → if no, refuse with warning
-3. Freeze OLED to "Recording..." screen
-4. Defer battery monitor reads (minimize I2C bus activity during recording)
-5. Set RGB LED to pulsing red
+2. Validate: duration within cap for the rate? sufficient free space? → if no, refuse with warning
+3. Read battery (MAX17043), then defer battery reads
+4. Freeze OLED to "Recording..." screen; lock menu (short press = stop)
+5. Set RGB LED to pulsing red; set state = recording (API now returns 409 for most requests)
 6. Configure ADC continuous mode: OPT101 channel only, requested sample rate
-7. Allocate PSRAM staging buffer
-8. Record start timestamp (RTC-offset-corrected UTC microseconds)
+7. Use the PSRAM recording buffer reserved at boot
+8. Record start timestamp (gettimeofday(), UTC microseconds)
 9. Start ADC continuous (DMA begins)
-10. DMA Drain task: read DMA buffers → append to PSRAM staging buffer
-11. Storage Flush task: periodically write PSRAM buffer chunks to LittleFS temp file
-12. On duration elapsed or stop command:
+10. DMA Drain task: parse DMA results → append uint16 samples to PSRAM buffer
+11. On duration elapsed or stop command (button / POST /api/record/stop):
     a. Stop ADC continuous
-    b. Flush remaining PSRAM buffer to flash
-    c. Compute CRC32 of data payload
-    d. Write final IREC header
-    e. Rename temp file to final recording filename
-13. Resume battery monitor and UI tasks
-14. Update OLED with recording summary
-15. Set RGB LED back to green (or cyan if tablet connected)
-16. App discovers completion on next GET /api/status poll (≤1 s)
+    b. Set state = saving; OLED shows "Saving…"
+    c. Compute CRC-32 of the sample data
+    d. Write IREC header + samples from PSRAM to a temp file on LittleFS
+    e. Rename temp file to /data/recordings/<id>.irec
+12. Read battery, resume battery monitor and UI tasks; set state = idle
+13. Update OLED with recording summary
+14. Set RGB LED back to green (or cyan if tablet connected)
+15. App discovers completion on next GET /api/status poll (≤1 s)
 ```
 
 ---
@@ -528,7 +590,8 @@ While connected:
    - Name / tag / annotate recordings with notes
 
 5. **Export**
-   - Export recording data as **CSV** (timestamp_ms, raw_adc, voltage_mv)
+   - Export recording data as **CSV** (timestamp_ms, raw_adc, voltage_mv) — `voltage_mv` uses the
+     device's calibration table stored in the recording's sidecar (§3.4)
    - Export recording data as **JSON**
    - Export graph as image (PNG/SVG)
 
@@ -551,14 +614,16 @@ While connected:
 - **Free space indicator** — shows device free storage in the status bar
 - **Auto-reconnect** — remembers ESP32 AP and reconnects automatically
 - **Handles both compressed and uncompressed recordings** transparently (checks IREC flags byte,
-  decompresses zlib if needed)
+  decompresses zlib if needed) and verifies the CRC-32 over the uncompressed samples
+- **Retries on `409 Busy`** — the device rejects most requests while recording/saving/compressing
 
 ### 10.4. Local Storage
 
 The app stores downloaded recordings locally on the tablet filesystem (via Tauri's fs API):
 
 - Default location: `~/IRSensor/recordings/`
-- Each recording saved as the original `.irec` binary file + a `.json` metadata sidecar
+- Each recording saved as the original `.irec` binary file + a `.json` metadata sidecar, which
+  includes the device's raw → mV calibration table (`GET /api/calibration`) at download time
 - The app maintains a local index/database of all downloaded recordings for offline browsing
 
 ---
@@ -602,6 +667,9 @@ IR_sensor/
 | Battery monitoring | MAX17043 I2C fuel gauge | Accurate ModelGauge™ SoC; no ADC channel conflict with OPT101; can read during recording |
 | Time sync | Tablet sends UTC on connect → `settimeofday()`; system clock persists in deep sleep | No external RTC hardware needed; drift corrected on each reconnection |
 | Deep sleep wake | GPIO wake on encoder button, firmware checks for ≥2 s hold after boot | Ultra-low standby power without a separate LP-core program |
-| Max recording duration | 300 seconds | Prevents accidental flash exhaustion; ~6 MB at 10 kHz |
+| Recording buffering | Whole recording in PSRAM, saved to flash after capture | No flash writes during capture → no flash/PSRAM cache stalls; simpler than a streaming ring buffer |
+| Max recording duration | 300 s (1–10 kHz), 120 s (20 kHz) | Must fit in ~6 MB of reserved PSRAM |
+| ADC calibration | Raw counts in files; device serves raw → mV table via `/api/calibration` | Full resolution; per-chip eFuse calibration only exists on the device |
+| Sample rate in header | Actual (measured) rate, in millihertz | DAQ practice; avoids mislabelling the timebase |
 | OPT101 power | 3.3V from ESP32 rail | Device operates on battery (no 5V available unplugged); output range ~0–2.15 V usable |
 | ADC attenuation | 6 dB (~0–2.2 V range) | Best match for OPT101 output ceiling at 3.3V supply |
