@@ -77,7 +77,8 @@ class MockDeviceTest(unittest.TestCase):
         """Asserts a valid IREC file whose CRC matches; returns (header, samples)."""
         h = server.decode_header(data)
         self.assertIsNotNone(h, "bad magic or version")
-        self.assertEqual(data[0x1A:0x20], b"\0" * 6, "reserved bytes not zero")
+        self.assertEqual(h["atten_tenths_db"], 120)
+        self.assertEqual(data[0x1B:0x20], b"\0" * 5, "reserved bytes not zero")
         samples = server.payload_samples(data)
         self.assertEqual(len(samples), h["sample_count"] * 2)
         self.assertEqual(zlib.crc32(samples) & 0xFFFFFFFF, h["crc32"])
@@ -115,6 +116,8 @@ class MockDeviceTest(unittest.TestCase):
         self.assertEqual(entry["size_bytes"], 32 + 3000 * 2)
         self.assertFalse(entry["compressed"])
         self.assertFalse(entry["overrun"])
+        self.assertEqual(entry["attenuation_db"], 12)
+        self.assertEqual(list(entry)[-3:], ["compressed", "overrun", "attenuation_db"])
         status = self.request("GET", "/api/status")[1]
         self.assertEqual(status["recording_count"], 1)
         self.assertEqual(status["free_bytes"], free_before - entry["size_bytes"])
@@ -125,8 +128,8 @@ class MockDeviceTest(unittest.TestCase):
         self.assertEqual(h["flags"], 0)
         self.assertEqual(h["start_utc_us"], entry["start_utc_us"])
         values = memoryview(samples).cast("H")
-        self.assertLessEqual(max(values), 4095)
-        self.assertGreater(max(values), 1000, "expected at least one IR pulse")
+        self.assertLessEqual(max(values), 2668, "above the OPT101's ~2.15 V ceiling")
+        self.assertGreater(max(values), 700, "expected at least one IR pulse")
 
         code, body = self.request("POST", "/api/compress")
         self.assertEqual((code, body), (200, {"queued": 1}))
@@ -304,6 +307,15 @@ class MockDeviceTest(unittest.TestCase):
         self.wait_idle()
         return self.record(**kw)
 
+    def test_header_attenuation(self):
+        self.assertEqual([server.num_tenths(t) for t in (0, 25, 60, 120)], [0, 2.5, 6, 12])
+        self.assertEqual(json.dumps(server.num_tenths(120)), "12")
+        payload = b"\0\0" * 10
+        data = server.encode_header(1000000, 10, 0, zlib.crc32(payload), 0, 25) + payload
+        self.assertEqual(data[0x1A], 25)
+        self.assertEqual(server.recording_entry(1, data)["attenuation_db"], 2.5)
+        self.assertEqual(server.decode_header(server.compress_irec(data))["atten_tenths_db"], 25)
+
     def test_compress_skips_files_that_dont_shrink(self):
         # white noise in both bytes of each sample won't compress
         payload = os.urandom(20000)
@@ -389,11 +401,11 @@ class MockDeviceTest(unittest.TestCase):
     def test_calibration(self):
         code, body = self.request("GET", "/api/calibration")
         self.assertEqual(code, 200)
-        self.assertEqual(body["attenuation_db"], 6)
+        self.assertEqual(body["attenuation_db"], 12)
         mv = body["mv"]
         self.assertEqual(len(mv), 4096)
         self.assertEqual(mv[0], 0)
-        self.assertEqual(mv[4095], 2200)
+        self.assertEqual(mv[4095], 3300)
         self.assertTrue(all(a <= b for a, b in zip(mv, mv[1:])))
 
     def test_calibration_unavailable(self):

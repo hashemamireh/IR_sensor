@@ -80,6 +80,8 @@ static std::vector<std::string> info_lines(const RecordingSummary& r) {
         fmt("Size: %u KB", u((r.size_bytes + 1023) / 1024)),
         fmt("Compressed: %s", (h.flags & irec::FLAG_COMPRESSED) ? "yes" : "no"),
         fmt("Overrun: %s", (h.flags & irec::FLAG_OVERRUN) ? "YES" : "no"),
+        (h.atten_tenths_db % 10) ? fmt("Atten: %u.%u dB", u(h.atten_tenths_db / 10), u(h.atten_tenths_db % 10))
+                                 : fmt("Atten: %u dB", u(h.atten_tenths_db / 10)),
     };
 }
 

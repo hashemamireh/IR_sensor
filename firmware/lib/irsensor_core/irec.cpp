@@ -13,6 +13,7 @@ static constexpr size_t OFF_COUNT   = 0x09;
 static constexpr size_t OFF_START   = 0x0D;
 static constexpr size_t OFF_CRC     = 0x15;
 static constexpr size_t OFF_FLAGS   = 0x19;
+static constexpr size_t OFF_ATTEN   = 0x1A;
 
 // Explicit little-endian packing — the header fields are unaligned
 static void put_le(uint8_t* p, uint64_t v, int bytes) {
@@ -34,6 +35,7 @@ void encode_header(const Header& h, uint8_t out[HEADER_SIZE]) {
     put_le(out + OFF_START, h.start_utc_us,    8);
     put_le(out + OFF_CRC,   h.crc32,           4);
     out[OFF_FLAGS] = h.flags;
+    out[OFF_ATTEN] = h.atten_tenths_db;
 }
 
 bool decode_header(const uint8_t in[HEADER_SIZE], Header* out) {
@@ -43,6 +45,7 @@ bool decode_header(const uint8_t in[HEADER_SIZE], Header* out) {
     out->start_utc_us    = get_le(in + OFF_START, 8);
     out->crc32           = static_cast<uint32_t>(get_le(in + OFF_CRC,   4));
     out->flags           = in[OFF_FLAGS];
+    out->atten_tenths_db = in[OFF_ATTEN];
     return true;
 }
 

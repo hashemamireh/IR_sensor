@@ -85,6 +85,17 @@ JsonWriter& JsonWriter::num(int64_t v) {
     return *this;
 }
 
+JsonWriter& JsonWriter::num_tenths(int64_t tenths) {
+    if (tenths % 10 == 0) return num(tenths / 10);
+    before_value();
+    char tmp[28];
+    int64_t whole = tenths / 10, frac = tenths % 10;
+    int n = snprintf(tmp, sizeof(tmp), "%s%" PRId64 ".%" PRId64, (tenths < 0 && whole == 0) ? "-" : "",
+                     whole, frac < 0 ? -frac : frac);
+    raw(tmp, static_cast<size_t>(n));
+    return *this;
+}
+
 JsonWriter& JsonWriter::boolean(bool v) {
     before_value();
     if (v) raw("true", 4);

@@ -13,7 +13,7 @@ import struct
 import sys
 import zlib
 
-HEADER = struct.Struct("<4sBIIQIB6s")  # magic, version, rate_mhz, count, start_us, crc, flags, reserved
+HEADER = struct.Struct("<4sBIIQIBB5s")  # magic, version, rate_mhz, count, start_us, crc, flags, atten (0.1 dB), reserved
 FLAG_COMPRESSED, FLAG_OVERRUN = 0x01, 0x02
 
 
@@ -51,7 +51,7 @@ def main():
 
     if len(data) < HEADER.size:
         sys.exit("FAIL  file shorter than the 32-byte header")
-    magic, version, rate_mhz, count, start_us, crc, flags, _ = HEADER.unpack_from(data)
+    magic, version, rate_mhz, count, start_us, crc, flags, atten, _ = HEADER.unpack_from(data)
     check(magic == b"IREC" and version == 1, f"magic {magic!r}, version {version}")
     if not ok:
         sys.exit(1)
@@ -73,6 +73,7 @@ def main():
     print(f"\n      start    {when.isoformat() if when else '(clock not set)'}")
     print(f"      rate     {rate:.3f} Hz   samples {count}   duration {count / rate:.3f} s" if rate else "      rate     0")
     print(f"      size     {len(data)} bytes{' (compressed)' if flags & FLAG_COMPRESSED else ''}")
+    print(f"      atten    {atten / 10:g} dB")
 
     samples = struct.unpack(f"<{len(payload) // 2}H", payload[: len(payload) // 2 * 2])
     if not samples or not rate:
@@ -81,7 +82,7 @@ def main():
     print(f"      signal   min {lo}  mean {sum(samples) / len(samples):.1f}  max {hi}  (12-bit: 0–4095)")
     check(hi <= 4095, "values fit 12 bits")
     if hi >= 4095:
-        print("      note     samples at 4095 — the ADC is clipping (see BRINGUP.md, ADC range)")
+        print("      note     samples at 4095 — the ADC is clipping (see BRINGUP.md §2.1)")
 
     threshold = args.threshold if args.threshold is not None else (lo + hi) // 2
     pulses = find_pulses(samples, threshold)

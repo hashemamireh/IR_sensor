@@ -57,7 +57,7 @@ Build a battery-powered, handheld IR sensor recording device that:
 | :--- | :--- |
 | ADC unit | ADC1 (single unit on ESP32-C5, 6 channels) |
 | Resolution | 12-bit (0–4095) |
-| Attenuation | 6 dB (nominal full scale ~2.2 V, matching the OPT101 output ceiling). **To verify on hardware**: newer ESP32 C-series datasheets give a smaller accurate range at 6 dB (≈ 1.3 V on the C3); if readings go non-linear above that, switch to 12 dB — see `firmware/BRINGUP.md` §2.1 |
+| Attenuation | **12 dB** — covers the full 0–3.3 V input range, which the ESP32-C5 converts accurately end to end. 6 dB was rejected: its full scale is V<sub>ref</sub> ÷ 0.5 and V<sub>ref</sub> varies 1.0–1.2 V between chips, so it tops out anywhere from 2.0 to 2.4 V and could clip the OPT101's ~2.15 V peak on some chips. Cost: ~1.1 mV per count instead of ~0.55 mV (the OPT101's range spans ~2000 counts), irrelevant for timing. Fixed in firmware; recorded in every file header (§4.2) |
 | Sampling mode | **Continuous mode with DMA** (GDMA controller) |
 | Configurable rates | 1 kHz, 5 kHz, **10 kHz** (default), 20 kHz (nominal — see §3.5) |
 | Channel during recording | OPT101 channel only |
@@ -93,8 +93,8 @@ The ESP32-C5's GDMA controller offloads ADC sampling entirely to hardware:
   (`ADC_CALI_SCHEME_VER_CURVE_FITTING`), which is driven by per-chip correction values burned into
   eFuse at the factory. There is no runtime calibration procedure to run.
 - Because those eFuse values only exist on the chip, the device exposes a **raw → mV lookup
-  table** via `GET /api/calibration` (4096 entries, one per raw count, for the configured
-  attenuation). The app stores this table in each downloaded recording's `.json` sidecar (§10.4),
+  table** via `GET /api/calibration` (4096 entries, one per raw count, for the attenuation in
+  use — also stored in each recording's header, §4.2). The app stores this table in each downloaded recording's `.json` sidecar (§10.4),
   so every recording can be converted to millivolts offline.
 
 ### 3.5. Actual Sample Rate
@@ -138,7 +138,9 @@ Header (32 bytes):
   0x19    1B    Flags: bit 0 = compressed (zlib)
                        bit 1 = overrun — samples were lost during capture (DMA pool
                                overflow); the timeline is unreliable
-  0x1A    6B    Reserved (zero-filled)
+  0x1A    1B    ADC attenuation in tenths of a dB (uint8): 0, 25, 60 or 120 — currently always
+                120 (12 dB, §3.2); lets a file be converted to mV unambiguously
+  0x1B    5B    Reserved (zero-filled)
 
 Data payload:
   If uncompressed: uint16_le[] — raw ADC values, 2 bytes per sample
@@ -445,7 +447,7 @@ needed — the simplicity of stateless REST is preferred on a single-core MCU wi
 | `POST` | `/api/settings` | Update device settings. Body: JSON of setting key-values |
 | `POST` | `/api/sleep` | Enter deep sleep (§7.1). Responds first, then sleeps ~0.5 s later; WiFi goes down with it |
 | `GET` | `/api/settings` | Read current device settings |
-| `GET` | `/api/calibration` | Raw → mV lookup table for the OPT101 channel: `{"attenuation_db": 6, "mv": [<4096 integers>]}` (§3.4) |
+| `GET` | `/api/calibration` | Raw → mV lookup table for the OPT101 channel: `{"attenuation_db": 12, "mv": [<4096 integers>]}` (§3.4) |
 
 #### Requests During Recording
 
@@ -468,7 +470,7 @@ All JSON bodies are objects. Shapes for the endpoints whose output isn't obvious
 | :--- | :--- |
 | `POST /api/record` | `200` `{"id": 42, "duration_s": 30, "sample_rate_hz": 10000}` |
 | `POST /api/record/stop` | `200` `{"id": 42}` |
-| `GET /api/recordings` | `200` `{"recordings": [<entry>, …]}` in ascending ID order; each entry is `{"id", "start_utc_us", "duration_ms", "sample_rate_mhz", "sample_count", "size_bytes", "compressed", "overrun"}` |
+| `GET /api/recordings` | `200` `{"recordings": [<entry>, …]}` in ascending ID order; each entry is `{"id", "start_utc_us", "duration_ms", "sample_rate_mhz", "sample_count", "size_bytes", "compressed", "overrun", "attenuation_db"}` (`attenuation_db` is a number, e.g. `12` or `2.5`) |
 | `GET /api/recordings/{id}` | `200` `application/octet-stream` (chunked), `Content-Disposition: attachment; filename="00042.irec"` |
 | `DELETE /api/recordings/{id}` | `200` `{"deleted": 1}` |
 | `DELETE /api/recordings` | `200` `{"deleted": <count>}` |
@@ -730,4 +732,4 @@ IR_sensor/
 | ADC calibration | Raw counts in files; device serves raw → mV table via `/api/calibration` | Full resolution; per-chip eFuse calibration only exists on the device |
 | Sample rate in header | Actual (measured) rate, in millihertz | DAQ practice; avoids mislabelling the timebase |
 | OPT101 power | 3.3V from ESP32 rail | Device operates on battery (no 5V available unplugged); output range ~0–2.15 V usable |
-| ADC attenuation | 6 dB (~0–2.2 V range) | Best match for OPT101 output ceiling at 3.3V supply |
+| ADC attenuation | 12 dB (full 0–3.3 V), fixed, recorded per file | Never clips the OPT101's ~2.15 V peak on any chip; the resolution given up doesn't affect timing |

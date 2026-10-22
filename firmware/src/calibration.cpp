@@ -24,7 +24,7 @@ void calibration_init() {
         cali = nullptr;
         return;
     }
-    ESP_LOGI(TAG, "Curve-fitting calibration ready (%d dB attenuation)", OPT101_ADC_ATTEN_DB);
+    ESP_LOGI(TAG, "Curve-fitting calibration ready (%d dB attenuation)", OPT101_ADC_ATTEN_TENTHS_DB / 10);
 }
 
 bool calibration_available() { return cali != nullptr; }

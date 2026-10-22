@@ -6,8 +6,10 @@
 // lib/irsensor_core (recording.h, irec.h, settings.h).
 
 // --- OPT101 ADC ---
-#define OPT101_ADC_ATTEN    ADC_ATTEN_DB_6  // ~0–2.2 V, matches the OPT101 output ceiling (spec §3.2)
-static constexpr int OPT101_ADC_ATTEN_DB = 6;
+// 12 dB covers the full 0–3.3 V, so the OPT101's ~2.15 V peak never clips. (6 dB tops out at
+// 2.0–2.4 V depending on the chip's reference voltage.) Spec §3.2.
+#define OPT101_ADC_ATTEN    ADC_ATTEN_DB_12
+static constexpr int OPT101_ADC_ATTEN_TENTHS_DB = 120;  // stored in every recording's header
 
 // --- Recorder (spec §3.3) — tune on hardware ---
 static constexpr uint32_t ADC_FRAME_BYTES = 1024;         // 256 results per DMA frame

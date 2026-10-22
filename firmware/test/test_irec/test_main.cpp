@@ -34,6 +34,7 @@ static void test_header_layout_matches_spec() {
     h.start_utc_us    = 0x0102030405060708ULL;
     h.crc32           = 0xAABBCCDD;
     h.flags           = irec::FLAG_COMPRESSED;
+    h.atten_tenths_db = 120;
 
     uint8_t buf[irec::HEADER_SIZE];
     memset(buf, 0xFF, sizeof(buf));
@@ -47,7 +48,8 @@ static void test_header_layout_matches_spec() {
         0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,  // 0x0D start timestamp
         0xDD, 0xCC, 0xBB, 0xAA,                          // 0x15 CRC
         0x01,                                            // 0x19 flags
-        0, 0, 0, 0, 0, 0,                                // 0x1A reserved
+        120,                                             // 0x1A attenuation (0.1 dB)
+        0, 0, 0, 0, 0,                                   // 0x1B reserved
     };
     TEST_ASSERT_EQUAL_HEX8_ARRAY(expected, buf, irec::HEADER_SIZE);
 }
@@ -59,6 +61,7 @@ static void test_header_roundtrip() {
     in.start_utc_us    = 1792540800123456ULL;
     in.crc32           = 0xDEADBEEF;
     in.flags           = 0;
+    in.atten_tenths_db = 25;
 
     uint8_t buf[irec::HEADER_SIZE];
     irec::encode_header(in, buf);
@@ -70,6 +73,7 @@ static void test_header_roundtrip() {
     TEST_ASSERT_TRUE(in.start_utc_us == out.start_utc_us);
     TEST_ASSERT_EQUAL_HEX32(in.crc32, out.crc32);
     TEST_ASSERT_EQUAL_UINT8(in.flags, out.flags);
+    TEST_ASSERT_EQUAL_UINT8(in.atten_tenths_db, out.atten_tenths_db);
 }
 
 static void test_decode_rejects_bad_magic_and_version() {

@@ -58,7 +58,7 @@ I (...) irsensor: NVS initialized
 I (...) storage: LittleFS mounted: ... KB used / ~29600 KB total
 I (...) settings: Loaded: brightness=medium timeout=60s rate=10000Hz duration=30s
 I (...) recordings: 0 recordings, next ID 1
-I (...) calibration: Curve-fitting calibration ready (6 dB attenuation)
+I (...) calibration: Curve-fitting calibration ready (12 dB attenuation)
 I (...) irsensor: I2C bus initialized
 I (...) battery: MAX17043 ready (0x36)
 I (...) led: RGB LED initialized
@@ -126,7 +126,7 @@ curl -s -X POST http://192.168.4.1/api/settings -d '{"brightness":"high"}'
 curl -s -i -X POST http://192.168.4.1/api/settings -d '{"brightness":"max"}'
 ```
 
-- [ ] Calibration table: 200, `"attenuation_db":6`, 4096 values rising from ~0 to ~2200–2500 mV
+- [ ] Calibration table: 200, `"attenuation_db":12`, 4096 values rising from ~0 to over 3000 mV
   (prints the first/last few):
 
 ```bash
@@ -281,29 +281,26 @@ curl -s -X POST http://192.168.4.1/api/sleep
 pio run -e irsensor -t upload -t monitor
 ```
 
-### 2.1 ADC range — is 6 dB attenuation enough?
+### 2.1 ADC range
 
-At 6 dB the ADC's nominal full scale is ~2.2 V (1.1 V reference ÷ 0.5), which is why the spec
-chose it. But Espressif's datasheets for the newer C-series chips give a smaller *accurate*
-range at 6 dB (≈ 1.3 V on the ESP32-C3), with readings going non-linear above it — and the
-OPT101 reaches ~2.1 V. Check the ESP32-C5 datasheet (Electrical Characteristics → ADC) for the
-6 dB and 12 dB ranges, then measure:
+The firmware uses 12 dB attenuation, which covers the full 0–3.3 V, so the OPT101's output
+(at most ~2.15 V on a 3.3 V supply) should never clip. Confirm it, and check the calibrated
+readings against a meter:
 
 - [ ] Cover the sensor and record 5 s → values near the bottom (tens of counts at most).
 - [ ] Hold a steady, bright IR source on the sensor (an IR LED on a resistor, not a remote) and
-  measure the OPT101's output pin with a multimeter. Record 5 s; take the mean raw value from
-  `check_irec.py` and convert it with the calibration table:
+  record 5 s. `check_irec.py` must not print the "samples at 4095" note; the brightest
+  OPT101 output should land around 2000 counts.
+- [ ] While it's lit, measure the OPT101's output pin with a multimeter and compare with the
+  device's reading: take the mean raw value from `check_irec.py` and look it up in the
+  calibration table (replace `1234` with that value):
 
 ```bash
 curl -s http://192.168.4.1/api/calibration | python3 -c 'import json,sys; t=json.load(sys.stdin)["mv"]; print(t[int(sys.argv[1])])' 1234
 ```
 
-  (replace `1234` with the mean raw value). Repeat at 3–4 brightness levels up to the brightest.
-  - Device mV matches the multimeter (within ~2%) all the way up → 6 dB is fine.
-  - Device mV falls behind the multimeter at the high end, or samples sit at 4095 → switch to
-    12 dB: set `OPT101_ADC_ATTEN` to `ADC_ATTEN_DB_12` and `OPT101_ADC_ATTEN_DB` to 12 in
-    `include/config.h`, reflash, re-check, and update spec §3.2. 12 dB costs a little resolution
-    (~0.75 mV per count instead of ~0.55), which doesn't matter for timing measurements.
+  They should agree to within ~20–40 mV. A larger gap points at the calibration
+  (`/api/calibration` returning 503 means the chip has none) or the wiring.
 
 ### 2.2 Actual sample rates (spec §3.5)
 
@@ -372,7 +369,8 @@ Fill in as you go; numbers marked → feed back into code or the spec.
 | → OLED orientation (`OLED_FLIP`) | |
 | → Encoder counts per click / direction | |
 | Brightness levels look right? | |
-| → ADC attenuation (6 dB OK, or 12 dB?) and the brightest OPT101 output measured | |
+| Brightest OPT101 output (counts / mV), any clipping? | |
+| Device mV vs multimeter on the OPT101 output | |
 | → Actual rate @ 1 kHz (Hz) | |
 | → Actual rate @ 5 kHz (Hz) | |
 | → Actual rate @ 10 kHz (Hz) | |

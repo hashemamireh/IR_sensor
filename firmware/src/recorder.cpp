@@ -188,6 +188,7 @@ static bool save(const Job& job, uint64_t start_utc_us, const Capture& c) {
     h.start_utc_us    = start_utc_us;
     h.crc32           = irec::crc32_update(0, data, data_bytes);
     h.flags           = c.overrun ? irec::FLAG_OVERRUN : 0;
+    h.atten_tenths_db = OPT101_ADC_ATTEN_TENTHS_DB;
 
     uint8_t header[irec::HEADER_SIZE];
     irec::encode_header(h, header);

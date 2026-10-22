@@ -19,9 +19,10 @@ struct Header {
     uint64_t start_utc_us    = 0;
     uint32_t crc32           = 0;  // CRC-32 of the uncompressed samples
     uint8_t  flags           = 0;
+    uint8_t  atten_tenths_db = 0;  // ADC attenuation used, in 0.1 dB (12 dB → 120)
 };
 
-// Writes magic, version, fields and zeroed reserved bytes.
+// Writes magic, version, fields and the zeroed reserved bytes.
 void encode_header(const Header& h, uint8_t out[HEADER_SIZE]);
 
 // False on bad magic or unsupported version.

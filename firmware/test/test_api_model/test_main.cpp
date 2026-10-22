@@ -80,6 +80,7 @@ static void test_recording_entry() {
     h.sample_count = 300000;
     h.start_utc_us = 1792540800000000ULL;
     h.flags = irec::FLAG_COMPRESSED;
+    h.atten_tenths_db = 120;
 
     char buf[256];
     JsonWriter w(buf, sizeof(buf));
@@ -88,7 +89,7 @@ static void test_recording_entry() {
     TEST_ASSERT_EQUAL_STRING(
         "{\"id\":42,\"start_utc_us\":1792540800000000,\"duration_ms\":30000,"
         "\"sample_rate_mhz\":10000000,\"sample_count\":300000,"
-        "\"size_bytes\":123456,\"compressed\":true,\"overrun\":false}",
+        "\"size_bytes\":123456,\"compressed\":true,\"overrun\":false,\"attenuation_db\":12}",
         buf);
 }
 

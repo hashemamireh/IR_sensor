@@ -22,6 +22,7 @@ public:
     JsonWriter& key(const char* k);
     JsonWriter& str(const char* v);
     JsonWriter& num(int64_t v);
+    JsonWriter& num_tenths(int64_t tenths);  // 120 → 12, 25 → 2.5
     JsonWriter& boolean(bool v);
     JsonWriter& null();
 

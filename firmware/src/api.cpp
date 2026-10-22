@@ -431,7 +431,7 @@ static esp_err_t handle_calibration(httpd_req_t* req) {
     char buf[512];
     JsonWriter w(buf, sizeof(buf));
     w.begin_object()
-        .key("attenuation_db").num(OPT101_ADC_ATTEN_DB)
+        .key("attenuation_db").num_tenths(OPT101_ADC_ATTEN_TENTHS_DB)
         .key("mv").begin_array();
 
     httpd_resp_set_type(req, "application/json");

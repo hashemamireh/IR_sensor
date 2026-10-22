@@ -30,20 +30,25 @@ MAGIC = b"IREC"
 VERSION = 0x01
 FLAG_COMPRESSED = 0x01
 FLAG_OVERRUN = 0x02  # samples were lost during capture — timing unreliable
-# magic, version, rate (mHz), sample count, start (UTC µs), CRC-32, flags, reserved
-HEADER_STRUCT = struct.Struct("<4sBIIQIB6x")
+# magic, version, rate (mHz), sample count, start (UTC µs), CRC-32, flags,
+# attenuation (0.1 dB), reserved
+HEADER_STRUCT = struct.Struct("<4sBIIQIBB5x")
 assert HEADER_STRUCT.size == HEADER_SIZE
 
+ATTEN_TENTHS_DB = 120  # 12 dB, fixed in firmware (spec §3.2)
 
-def encode_header(rate_mhz, sample_count, start_utc_us, crc32, flags):
-    return HEADER_STRUCT.pack(MAGIC, VERSION, rate_mhz, sample_count, start_utc_us, crc32, flags)
+
+def encode_header(rate_mhz, sample_count, start_utc_us, crc32, flags,
+                  atten_tenths_db=ATTEN_TENTHS_DB):
+    return HEADER_STRUCT.pack(MAGIC, VERSION, rate_mhz, sample_count, start_utc_us, crc32, flags,
+                              atten_tenths_db)
 
 
 def decode_header(data):
     """Returns a dict, or None on bad magic / unsupported version."""
     if len(data) < HEADER_SIZE:
         return None
-    magic, version, rate, count, start, crc, flags = HEADER_STRUCT.unpack_from(data)
+    magic, version, rate, count, start, crc, flags, atten = HEADER_STRUCT.unpack_from(data)
     if magic != MAGIC or version != VERSION:
         return None
     return {
@@ -52,6 +57,7 @@ def decode_header(data):
         "start_utc_us": start,
         "crc32": crc,
         "flags": flags,
+        "atten_tenths_db": atten,
     }
 
 
@@ -204,17 +210,27 @@ def recording_entry(rec_id, data):
         "size_bytes": len(data),
         "compressed": bool(h["flags"] & FLAG_COMPRESSED),
         "overrun": bool(h["flags"] & FLAG_OVERRUN),
+        "attenuation_db": num_tenths(h["atten_tenths_db"]),
     }
+
+
+def num_tenths(tenths):
+    """JsonWriter::num_tenths: 120 → 12, 25 → 2.5 (no trailing ".0")."""
+    return tenths // 10 if tenths % 10 == 0 else tenths / 10
 
 
 # --- Calibration (§3.4) ----------------------------------------------------
 
-ATTENUATION_DB = 6
+ATTENUATION_DB = ATTEN_TENTHS_DB // 10
+FULL_SCALE_MV = 3300  # 12 dB covers the full 0–3.3 V input (§3.2)
+COUNTS_PER_MV = 4095 / FULL_SCALE_MV
+OPT101_MAX_MV = 2150  # output ceiling at a 3.3 V supply (§3.1)
 
 
 def calibration_table():
-    """4096 raw → mV entries: ~linear 0–2200 mV with a slight bow, monotonic."""
-    return [round(i * 2200 / 4095 + 8 * math.sin(math.pi * i / 4095)) for i in range(4096)]
+    """4096 raw → mV entries: ~linear 0–3300 mV with a slight bow, monotonic."""
+    return [round(i * FULL_SCALE_MV / 4095 + 12 * math.sin(math.pi * i / 4095))
+            for i in range(4096)]
 
 
 # --- Synthetic samples -----------------------------------------------------
@@ -227,14 +243,14 @@ def synth_samples(rec_id, rate_mhz, count):
     """
     rnd = random.Random(rec_id)
     rate_hz = rate_mhz / 1000.0
-    baseline = rnd.uniform(30, 80)  # ~15–45 mV ambient
+    baseline = rnd.uniform(15, 45) * COUNTS_PER_MV  # ambient
     drift_amp = rnd.uniform(3, 10)
     drift_period = rnd.uniform(4, 12) * rate_hz
     gauss = rnd.gauss
     sin = math.sin
     two_pi = 2 * math.pi
     samples = array("d", (
-        baseline + drift_amp * sin(two_pi * i / drift_period) + gauss(0, 3)
+        baseline + drift_amp * sin(two_pi * i / drift_period) + gauss(0, 2)
         for i in range(count)
     ))
 
@@ -243,7 +259,7 @@ def synth_samples(rec_id, rate_mhz, count):
     duration_s = count / rate_hz if rate_hz else 0
     while t < duration_s:
         width_s = rnd.choice((0.002, 0.005, 0.010, 0.050, 0.120, 0.400))
-        amp = rnd.uniform(1200, 3600)
+        amp = rnd.uniform(650, 1950) * COUNTS_PER_MV
         start = int(t * rate_hz)
         width = max(1, int(width_s * rate_hz))
         tau = max(1.0, 0.00015 * rate_hz)  # ~150 µs edges
@@ -257,7 +273,8 @@ def synth_samples(rec_id, rate_mhz, count):
             samples[start + k] += level
         t += width_s + rnd.uniform(0.3, 2.5)
 
-    out = array("H", (min(4095, max(0, int(round(v)))) for v in samples))
+    ceiling = int(OPT101_MAX_MV * COUNTS_PER_MV)  # OPT101 saturates before the ADC does
+    out = array("H", (min(ceiling, max(0, int(round(v)))) for v in samples))
     if sys.byteorder == "big":
         out.byteswap()
     return out.tobytes()
@@ -293,7 +310,7 @@ def compress_irec(data):
     if len(packed) >= len(data) - HEADER_SIZE:
         return data
     header = encode_header(h["sample_rate_mhz"], h["sample_count"], h["start_utc_us"],
-                           h["crc32"], h["flags"] | FLAG_COMPRESSED)
+                           h["crc32"], h["flags"] | FLAG_COMPRESSED, h["atten_tenths_db"])
     return header + packed
 
 

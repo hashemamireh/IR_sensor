@@ -75,6 +75,13 @@ static void test_unbalanced_close_sets_not_ok() {
     TEST_ASSERT_FALSE(w.ok());
 }
 
+static void test_num_tenths() {
+    char buf[64];
+    JsonWriter w(buf, sizeof(buf));
+    w.begin_array().num_tenths(120).num_tenths(25).num_tenths(0).num_tenths(-5).num_tenths(-125).end_array();
+    TEST_ASSERT_EQUAL_STRING("[12,2.5,0,-0.5,-12.5]", buf);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_nested_object_and_array);
@@ -84,5 +91,6 @@ int main() {
     RUN_TEST(test_exact_fit);
     RUN_TEST(test_streaming_with_clear_buffer);
     RUN_TEST(test_unbalanced_close_sets_not_ok);
+    RUN_TEST(test_num_tenths);
     return UNITY_END();
 }

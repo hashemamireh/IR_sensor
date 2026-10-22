@@ -100,13 +100,21 @@ The tests run with a 10× time scale and take about 10 s. They cover:
   doesn't change.
 - Flag bit 1 (overrun) is 0 unless `--overrun-every` selects the recording.
   Compression keeps it.
+- Byte 0x1A holds the ADC attenuation in tenths of a dB. It is always 120
+  (12 dB), the same value the firmware writes. Bytes 0x1B–0x1F are reserved and
+  zero. In the list, this byte becomes `"attenuation_db": 12`, written without a
+  trailing `.0` as `JsonWriter::num_tenths` does, so 25 would be `2.5`.
+- `firmware/tools/check_irec.py` accepts mock files. It reports a deliberate
+  overrun as FAIL.
 
 The samples are synthetic 12-bit data:
 
-- A dark baseline of about 30–80 counts, with slow drift and Gaussian noise
-  (σ ≈ 3 counts).
-- IR pulses of 2–400 ms and 1200–3600 counts, with about 150 µs edges, a small
-  overshoot and ripple, every 0.3–2.5 s.
+- Counts are scaled for 12 dB, at about 0.8 mV per count.
+- A dark baseline of about 15–45 mV (about 20–55 counts), with slow drift and
+  Gaussian noise (σ ≈ 2 counts).
+- IR pulses of 2–400 ms and about 0.65–1.95 V (about 800–2400 counts), with
+  about 150 µs edges, a small overshoot and ripple, every 0.3–2.5 s.
+- Values are clipped at the OPT101's ~2.15 V ceiling (about 2670 counts).
 - The data is deterministic per recording ID.
 
 A stopped recording holds `floor(elapsed × rate)` samples.
@@ -115,8 +123,8 @@ A stopped recording holds `floor(elapsed × rate)` samples.
 
 **Delete-all.** It runs within the request and the device stays `idle`.
 
-**Calibration.** The table is roughly linear, 0 → 2200 mV, with a slight bow (at
-most 8 mV). It is monotonic, with 4096 entries at `attenuation_db: 6`.
+**Calibration.** The table is roughly linear, 0 → 3300 mV, with a slight bow (at
+most 12 mV). It is monotonic, with 4096 entries at `attenuation_db: 12`.
 
 **Status extras.**
 
@@ -181,8 +189,11 @@ each one, and the spec should record the decision.
 9. **Recording ID limit.** Filenames have 5 digits, so the highest ID is 99999
    (`recording::MAX_ID`). The spec doesn't say what happens after that, and the
    mock doesn't enforce it.
-10. **What `free_bytes` counts.** The mock subtracts only the file sizes from the
+10. **Old `--data-dir` folders.** Files written by earlier versions of the mock
+    have 0 in byte 0x1A, so they are listed with `attenuation_db: 0`. Delete the
+    folder to regenerate it.
+11. **What `free_bytes` counts.** The mock subtracts only the file sizes from the
     capacity. It doesn't model LittleFS overhead, and it doesn't reserve space for
     a recording in progress.
-11. **Codes the mock never returns.** It never produces `500 storage_error`.
+12. **Codes the mock never returns.** It never produces `500 storage_error`.
     `503 calibration_unavailable` only appears with `--no-calibration`.
