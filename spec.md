@@ -13,8 +13,9 @@
 
 Build a battery-powered, handheld IR sensor recording device that:
 
-1. Captures analog readings from an **OPT101 photodiode** (with IR bandpass filter) at up to
-   **10 kHz** (0.1 ms per sample) to achieve **≤1 ms measurement precision**.
+1. Captures analog readings from an **OPT101 photodiode** (with IR bandpass filter) at
+   **1–20 kHz** (default **10 kHz**, 0.1 ms per sample) to achieve **≤1 ms measurement
+   precision**.
 2. Stores recordings locally on flash storage.
 3. Transfers recorded data wirelessly to a **companion tablet app** for visualization, overlay
    comparison, and export.
@@ -94,8 +95,10 @@ The ESP32-C5's GDMA controller offloads ADC sampling entirely to hardware:
   eFuse at the factory. There is no runtime calibration procedure to run.
 - Because those eFuse values only exist on the chip, the device exposes a **raw → mV lookup
   table** via `GET /api/calibration` (4096 entries, one per raw count, for the attenuation in
-  use — also stored in each recording's header, §4.2). The app stores this table in each downloaded recording's `.json` sidecar (§10.4),
-  so every recording can be converted to millivolts offline.
+  use). Each recording's header stores which attenuation it used (§4.2), not the table. The
+  app stores the table in each downloaded recording's `.json` sidecar (§10.4), so every
+  recording can be converted to millivolts offline. The app only applies a table whose
+  attenuation matches the file's header.
 
 ### 3.5. Actual Sample Rate
 
@@ -435,7 +438,7 @@ needed — the simplicity of stateless REST is preferred on a single-core MCU wi
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
-| `GET` | `/api/status` | Device status: battery (voltage + SoC%), free space, recording count, WiFi info, current state (`idle` / `recording` / `saving` / `compressing`), and if recording: `{elapsed_s, total_s, recording_id}`; if compressing: `{done, total}` |
+| `GET` | `/api/status` | Device status: battery (voltage + SoC%), free space, recording count, WiFi info, current state (`idle` / `recording` / `saving` / `compressing`), recording progress while recording, compression progress while compressing (shape under Response Formats) |
 | `POST` | `/api/record` | Start recording. Body: `{"duration_s": 30, "sample_rate_hz": 10000}` (nominal rate; both required). Returns error if insufficient space or the duration exceeds the cap for that rate (§4.4). |
 | `POST` | `/api/record/stop` | Stop the current recording early. The partial recording is finalized and saved. |
 | `GET` | `/api/recordings` | List all recordings with metadata (id, timestamp, duration, sample rate, size, compressed flag) |
@@ -468,6 +471,7 @@ All JSON bodies are objects. Shapes for the endpoints whose output isn't obvious
 
 | Endpoint | Success response |
 | :--- | :--- |
+| `GET /api/status` | `200` `{"state": "idle"\|"recording"\|"saving"\|"compressing", "battery": {"mv", "pct"}, "free_bytes", "recording_count", "wifi": {"ssid", "client_connected"}}`, plus `"recording": {"id", "elapsed_s", "total_s"}` while recording and `"compress": {"done", "total"}` while compressing |
 | `POST /api/record` | `200` `{"id": 42, "duration_s": 30, "sample_rate_hz": 10000}` |
 | `POST /api/record/stop` | `200` `{"id": 42}` |
 | `GET /api/recordings` | `200` `{"recordings": [<entry>, …]}` in ascending ID order; each entry is `{"id", "start_utc_us", "duration_ms", "sample_rate_mhz", "sample_count", "size_bytes", "compressed", "overrun", "attenuation_db"}` (`attenuation_db` is a number, e.g. `12` or `2.5`) |
@@ -497,6 +501,9 @@ Errors use `{"error": "<code>"}`, plus `"field"` for settings errors:
 - Delete-all runs within the request: deleting a file only updates LittleFS metadata, so even
   ~250 files take well under a few seconds.
 - Recording downloads are streamed in 4 KB chunks (`httpd_resp_send_chunk`).
+- The server handles **one request at a time**. A status poll waits until a download finishes
+  (a 6 MB file takes several seconds), so the app must not treat a slow poll during a download
+  as a disconnect. The app sends its own requests one at a time as well.
 
 #### Polling Pattern (App Side)
 
@@ -505,19 +512,36 @@ While connected:
   Every 1 second → GET /api/status
     - Update battery display, free space, connection indicator
     - If state == "recording": show progress bar (elapsed_s / total_s)
-    - If state changed from "recording" → "idle": recording complete
-      → GET /api/recordings/{id} to download
+    - If state == "idle" and the list may have changed (just connected, or state or
+      recording_count differs from the previous poll):
+      → GET /api/recordings
+      → GET /api/recordings/{id} for each recording not yet on the tablet, oldest first
 ```
+
+Downloads are driven by the recording list, not by watching one recording finish:
+
+- There is always a `saving` state between `recording` and `idle`, and a 1 s poll can miss a
+  short recording entirely.
+- Recordings can also be started from the device menu, or made while the tablet is away.
+- A recording stopped before any sample is captured is not saved, so the `recording.id` seen in
+  status may never appear in the list.
+
+Retries, 409 handling and what is skipped are in §10.4.
 
 ### 8.3. Time Synchronization Protocol
 
 1. Tablet connects to ESP32 SoftAP.
-2. App sends `POST /api/time` with current UTC timestamp in microseconds.
+2. Once `GET /api/status` first reports `idle` after connecting (in other states the request
+   gets `409`), the app sends `POST /api/time` with the current UTC timestamp in microseconds.
 3. ESP32 sets its system clock from the received time with `settimeofday()`.
 4. Recording start timestamps are read with `gettimeofday()`.
 5. The system clock keeps running through deep sleep (RTC timer), so no extra persistence is
    needed.
 6. On reconnection, the app re-syncs time to correct any RTC drift.
+
+The device doesn't report whether its clock has been set. A recording made after a full power
+loss and before the next sync has a start time near 1970. The app treats any start time before
+2024-01-01 (the floor `POST /api/time` accepts) as "clock not set".
 
 ---
 
@@ -598,37 +622,46 @@ While connected:
 
 | Parameter | Value |
 | :--- | :--- |
-| Target device | Microsoft Surface Go 2 running Fedora Workstation (Linux) |
+| Target device | Microsoft Surface Go 2 running Fedora Workstation (Linux). Kept OS-agnostic: also runs on macOS (development), possibly Android later |
 | App framework | **Tauri** (v2+) |
-| Frontend | **Svelte** (SvelteKit) with TypeScript |
+| Frontend | **Svelte** (SvelteKit, as a static single-page app) with TypeScript |
 | Backend | Rust (Tauri core) |
+| Package manager | **pnpm** (version pinned in `package.json`, lockfile committed) |
 | Source directory | `./app/` |
 
 ### 10.2. Key Frontend Libraries
 
 | Library | Purpose |
 | :--- | :--- |
-| **uPlot** or **Chart.js** | High-performance time-series graphing with zoom/pan |
+| **uPlot** | Time-series graphing. Chosen over Chart.js for speed: a recording can hold 3 M samples. The app gives it only the visible window, reduced to each pixel column's min and max at their real sample times, and handles wheel, drag and pinch itself |
 | **Svelte** | Reactive UI framework |
 | **TypeScript** | Type-safe frontend code |
-| Tauri HTTP / fetch API | Communication with ESP32 (REST polling) |
+| **Tauri HTTP plugin** (`@tauri-apps/plugin-http`) | Communication with the ESP32. Requests are made from Rust, so the device needs no CORS headers (the firmware sends none, so the webview's own `fetch` can't reach it) |
+| **Tauri fs plugin** | Local recording storage (§10.4) |
+| **fflate** | zlib decompression of compressed recordings; behaves the same in every webview and in unit tests |
 
 ### 10.3. App Features
 
 #### Core Features
 
 1. **Device Connection**
-   - Connect to ESP32 SoftAP WiFi network
-   - Auto-detect device at `192.168.4.1`
-   - Connection status indicator
-   - Automatic time sync on connect
+   - The tablet joins the device's WiFi through the **OS**; the app doesn't manage WiFi itself,
+     which keeps it OS-agnostic. When the device can't be reached, the app says which network to
+     join (`IRSensor-XXXX`, the last SSID seen) and how to wake the device.
+   - Auto-detect device at `192.168.4.1` (configurable, e.g. for the mock device)
+   - Connection status indicator; "unreachable" after two failed status polls (e.g. after
+     `POST /api/sleep`)
+   - Automatic time sync once the device is idle after connecting (§8.3)
 
 2. **Recording Control**
-   - Set recording duration (5–300 seconds)
-   - Set sample rate (1 kHz, 5 kHz, 10 kHz, 20 kHz)
+   - Set recording duration: single-select chips for 5 s, 10 s, 30 s, 1 min, 2 min, 5 min
+     (5 min hidden at 20 kHz), plus "Custom" for any whole number of seconds up to the cap —
+     300 s, or 120 s at 20 kHz (§4.4)
+   - Set sample rate: single-select chips (1 kHz, 5 kHz, 10 kHz, 20 kHz)
    - Start / stop recording remotely
    - Real-time progress indicator during recording
-   - Automatic download of recording data on completion
+   - Automatic download of recordings (§10.4); a recording started from the app opens in the
+     graph once it has downloaded
 
 3. **Data Visualization**
    - Time-series graph of recording data (ADC value or calibrated voltage vs. time)
@@ -642,7 +675,12 @@ While connected:
 4. **Recording Management**
    - Browse all recordings on device (synced list)
    - Download individual or all recordings to tablet local storage
-   - Delete recordings from device
+   - Delete a recording from the device, the tablet, or both: one Delete button opens a dialog
+     with a checkbox for each place the recording exists, and warns before deleting the last
+     copy. A recording deleted from the tablet only is not downloaded again automatically (it
+     can still be downloaded by hand).
+   - Delete all recordings on the device (`DELETE /api/recordings`), after an in-app
+     confirmation dialog that says how many aren't on the tablet yet. Tablet copies are kept.
    - View recording metadata (timestamp, duration, sample rate, size)
    - Name / tag / annotate recordings with notes
 
@@ -670,7 +708,10 @@ While connected:
 - **Touch-optimized** — large tap targets, swipe gestures for the Surface Go 2 touch screen
 - **Responsive layout** — adapts to the Surface Go 2's 10.5" 1920×1280 display
 - **Free space indicator** — shows device free storage in the status bar
-- **Auto-reconnect** — remembers ESP32 AP and reconnects automatically
+- **Auto-reconnect** — the OS rejoins the remembered WiFi; the app keeps polling and, as soon
+  as the device answers, re-syncs the time and resumes the list and downloads
+- **Local time** — device times are UTC; the app shows them in the tablet's local time (UTC on
+  hover), and "clock not set" for start times before 2024 (§8.3)
 - **Handles both compressed and uncompressed recordings** transparently (checks IREC flags byte,
   decompresses zlib if needed) and verifies the CRC-32 over the uncompressed samples
 - **Retries on `409 Busy`** — the device rejects most requests while recording/saving/compressing
@@ -681,10 +722,49 @@ While connected:
 
 The app stores downloaded recordings locally on the tablet filesystem (via Tauri's fs API):
 
-- Default location: `~/IRSensor/recordings/`
-- Each recording saved as the original `.irec` binary file + a `.json` metadata sidecar, which
-  includes the device's raw → mV calibration table (`GET /api/calibration`) at download time
-- The app maintains a local index/database of all downloaded recordings for offline browsing
+```
+~/IRSensor/recordings/<SSID>_<id5>.irec   the file exactly as downloaded (compressed or not)
+~/IRSensor/recordings/<SSID>_<id5>.json   its sidecar
+~/IRSensor/devices/<SSID>.json            last calibration table seen, per device
+```
+
+- **Naming.** Recording IDs are unique per device only, and restart if the device's NVS is
+  erased, so files are named by SSID and ID, e.g. `IRSensor-AB12_00042.irec`. A *different*
+  recording that wants an existing name gets `-2`, `-3`, … rather than overwriting it.
+- **Matching.** A device recording and a tablet copy are the same recording when SSID, ID and
+  `start_utc_us` all match.
+- **Sidecar** (`schema: 1`). The `.irec` is written first and the sidecar last, so a sidecar
+  only exists for a complete download:
+
+  | Field | Contents |
+  | :--- | :--- |
+  | `schema` | `1` |
+  | `file` | the `.irec` file next to it |
+  | `device_ssid`, `id` | where it came from |
+  | `downloaded_utc_us` | when |
+  | `start_utc_us`, `duration_ms`, `sample_rate_mhz`, `sample_count`, `size_bytes`, `compressed`, `overrun`, `attenuation_db` | the device's list entry (`size_bytes` is the downloaded file's size) |
+  | `crc32`, `crc_ok` | the header's CRC and whether the samples matched it |
+  | `calibration` | the device's `GET /api/calibration` answer at download time, or `null` |
+  | `name`, `notes`, `tags` | reserved for annotation (`null`, `""`, `[]`) |
+
+- **Index.** The sidecars *are* the local index: the app scans them at startup, and there is no
+  separate database.
+- **Auto-download.** Whenever the device is idle and its list may have changed (§8.2), the app
+  downloads every recording not on the tablet, oldest first:
+  - a `409` just means "not now": the work resumes at the next idle status poll;
+  - network errors are retried 3 times with back-off, then the recording waits for a manual
+    retry; counters reset when the device reconnects;
+  - a `404` (deleted meanwhile, or a 0-sample recording) is dropped quietly;
+  - a CRC mismatch is retried once; if it fails again the file is kept, marked
+    `crc_ok: false`, and never deleted from the device automatically;
+  - recordings deleted from the tablet only are skipped (§10.3.4).
+- **Calibration fallback.** The table is fetched once per connection (it never changes for a
+  chip) and cached per device. If `GET /api/calibration` returns `503 calibration_unavailable`,
+  the app uses a table cached on an earlier connection, if any; otherwise the sidecar gets
+  `calibration: null` and the graph shows raw ADC counts with a note. No approximate linear
+  conversion is used.
+- **Overrides** for development: `IRSENSOR_DATA_DIR` replaces `~/IRSensor`, and
+  `IRSENSOR_DEVICE_URL` sets the device URL for one run.
 
 ---
 
@@ -721,6 +801,11 @@ IR_sensor/
 | Firmware language | C++ (ESP-IDF via PlatformIO) | DMA/ADC APIs not available in MicroPython; deterministic timing required |
 | Communication | WiFi SoftAP + HTTP REST (polling) | High throughput for 1+ MB transfers; no router needed; stateless REST is simpler than WebSocket on single-core MCU |
 | App framework | Tauri + Svelte + TypeScript | Lightweight (~5-10 MB), web-based UI (vibe-codable), Rust backend for file I/O |
+| App ↔ device transport | Tauri HTTP plugin | Requests from Rust: no CORS needed on the device, binary downloads work |
+| Joining the device's WiFi | Through the OS; the app only detects the device | OS-agnostic (Linux, macOS, later Android); NetworkManager already remembers and rejoins |
+| App graphing | uPlot with min/max decimation and own gestures | Millions of samples on a low-power tablet; pulse edges stay at their real times |
+| Local recording index | The `.json` sidecars themselves | Nothing to get out of sync; a folder scan is cheap at this scale |
+| Auto-download | List-driven, whenever the device is idle | Also catches device-menu recordings and ones made while the tablet was away |
 | Storage format | Custom binary (IREC) on LittleFS | Compact (2 bytes/sample), CRC32 integrity, optional zlib compression |
 | Settings persistence | ESP-IDF NVS (key-value) | Platform built-in; power-loss safe; no custom serialization code |
 | Display during recording | Frozen OLED + RGB LED | Avoids I2C contention and CPU load on single-core MCU |
