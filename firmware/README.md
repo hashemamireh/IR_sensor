@@ -4,6 +4,9 @@ ESP-IDF firmware for a battery-powered, handheld IR sensor recorder built on the
 
 Captures analog readings from an **OPT101 photodiode** (with IR bandpass filter) at up to **10 kHz** via DMA, stores recordings to on-chip flash, and serves them over WiFi to a companion tablet app.
 
+> [!IMPORTANT]
+> This firmware was written and cross-compiled without access to the physical board. It builds cleanly for ESP32-C5 but has **not been flashed or tested on hardware**. Expect pin/peripheral issues on first boot.
+
 ## Hardware
 
 | Component | Part |
@@ -93,6 +96,41 @@ The device runs as a **WiFi SoftAP** (`IRSensor-XXXX`). The companion app connec
 ### Recording Format (IREC)
 
 32-byte header followed by `uint16_le[]` ADC samples (2 bytes each). Includes CRC32, UTC timestamp, and an optional zlib compression flag. See [`overview.md`](../overview.md) §4.2 for the full spec.
+
+## Known Build Issues
+
+### SCons version conflict (PlatformIO Core 6.2.0 + pioarduino)
+
+The pioarduino fork of `platform-espressif32` ships with `tool-scons@4.8.1`, but PlatformIO Core 6.2.0 force-upgrades it to 4.11.1, causing `ModuleNotFoundError: No module named 'SCons.Tool.FortranCommon'`.
+
+**Fix:** Patch `~/.platformio/platforms/espressif32/platform.json` — change the `tool-scons` entry to:
+
+```json
+"tool-scons": {
+  "type": "tool",
+  "optional": true,
+  "owner": "platformio",
+  "version": "~4.41101.0"
+}
+```
+
+This needs to be re-applied after running `pio pkg update -p espressif32`.
+
+### Missing Python packages (Homebrew PlatformIO)
+
+If PlatformIO was installed via Homebrew, its bundled Python may be missing packages the ESP-IDF builder needs. Install into PlatformIO's own Python (adjust the Cellar path to match your version):
+
+```sh
+/opt/homebrew/Cellar/platformio/6.2.0_1/libexec/bin/python -m pip install pyyaml littlefs-python fatfs-ng
+```
+
+### Custom board definition
+
+The board JSON in `boards/waveshare_esp32c5_n32r8.json` must also exist at `~/.platformio/platforms/espressif32/boards/waveshare_esp32c5_n32r8.json` for PlatformIO to find it. Copy it there if the platform is reinstalled:
+
+```sh
+cp boards/waveshare_esp32c5_n32r8.json ~/.platformio/platforms/espressif32/boards/
+```
 
 ## Configuration
 
