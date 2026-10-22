@@ -198,6 +198,11 @@ Data payload:
 - Files are stored as `/data/recordings/<id>.irec`, with the ID zero-padded to 5 digits (e.g.
   `/data/recordings/00042.irec`).
 - The same ID is used in the REST API (`/api/recordings/{id}`).
+- **Index in RAM.** The firmware reads every recording's header from flash once, at boot, and
+  keeps them in memory (≈ 40 bytes each), updating the index whenever a recording is saved,
+  deleted or compressed. Listing recordings — `GET /api/recordings`, the device's Recordings
+  menu, Compress All — never reads flash, so it stays fast as the directory grows (LittleFS
+  lookups get slower with more files).
 
 ---
 
@@ -441,7 +446,7 @@ needed — the simplicity of stateless REST is preferred on a single-core MCU wi
 | `GET` | `/api/status` | Device status: battery (voltage + SoC%), free space, recording count, WiFi info, current state (`idle` / `recording` / `saving` / `compressing`), recording progress while recording, compression progress while compressing (shape under Response Formats) |
 | `POST` | `/api/record` | Start recording. Body: `{"duration_s": 30, "sample_rate_hz": 10000}` (nominal rate; both required). Returns error if insufficient space or the duration exceeds the cap for that rate (§4.4). |
 | `POST` | `/api/record/stop` | Stop the current recording early. The partial recording is finalized and saved. |
-| `GET` | `/api/recordings` | List all recordings with metadata (id, timestamp, duration, sample rate, size, compressed flag) |
+| `GET` | `/api/recordings` | List all recordings with metadata (entry fields under Response Formats). Served from RAM (§4.6), so it's quick however many recordings there are |
 | `GET` | `/api/recordings/{id}` | Download a specific recording (binary, IREC format) |
 | `DELETE` | `/api/recordings/{id}` | Delete a specific recording |
 | `DELETE` | `/api/recordings` | Delete all recordings. Body must be exactly `{"confirm": "DELETE_ALL"}`; anything else is rejected with `400`. Guards against accidental/buggy requests — the user-facing confirmation is a dialog in the app. |

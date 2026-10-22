@@ -74,6 +74,9 @@ function describeError(status: number, code: string, body: Record<string, unknow
 // behind a download; the app serialises its own requests (device.svelte.ts).
 const TIMEOUT_MS = 4000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
+// Safety margin: the firmware used to open every file for its header to build the
+// list. RAM-cached headers should make it fast; keep this until bring-up confirms it.
+const LIST_TIMEOUT_MS = 30_000;
 
 export class DeviceApi {
 	constructor(readonly baseUrl: string) {}
@@ -117,7 +120,8 @@ export class DeviceApi {
 	}
 
 	async listRecordings(): Promise<DeviceRecording[]> {
-		return (await this.json<{ recordings: DeviceRecording[] }>('GET', '/api/recordings')).recordings;
+		return (await this.json<{ recordings: DeviceRecording[] }>('GET', '/api/recordings', undefined, LIST_TIMEOUT_MS))
+			.recordings;
 	}
 
 	/** The raw .irec bytes, exactly as stored on the device */

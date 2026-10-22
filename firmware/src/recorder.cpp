@@ -172,8 +172,9 @@ static Capture capture(const Job& job) {
 
 // ── Save ────────────────────────────────────────────────────────────────────
 
-// Writes the IREC file to a temp path, then renames it into place (spec §9.4)
-static bool save(const Job& job, uint64_t start_utc_us, const Capture& c) {
+// Writes the IREC file to a temp path, then renames it into place (spec §9.4).
+// On success *out holds the header written, for the recordings index.
+static bool save(const Job& job, uint64_t start_utc_us, const Capture& c, irec::Header* out) {
     if (c.count == 0) {
         ESP_LOGW(TAG, "No samples captured — nothing saved");
         return false;
@@ -220,6 +221,7 @@ static bool save(const Job& job, uint64_t start_utc_us, const Capture& c) {
     }
     ESP_LOGI(TAG, "Saved %s — %lu samples, CRC %08lx%s", final_path, (unsigned long)c.count,
              (unsigned long)h.crc32, c.overrun ? " (OVERRUN: samples lost)" : "");
+    *out = h;
     return true;
 }
 
@@ -245,14 +247,18 @@ static void run(const Job& job) {
 
     device_set_state(api::DeviceState::Saving);
     vTaskPrioritySet(nullptr, RECORDER_SAVE_PRIORITY);
-    bool saved = save(job, start_utc_us, c);
+    irec::Header header;
+    bool saved = save(job, start_utc_us, c, &header);
     storage_refresh();
     vTaskPrioritySet(nullptr, RECORDER_CAPTURE_PRIORITY);
 
     battery_read_now();  // reading right after the recording (spec §5.3)
     {
         DeviceLock lock;
-        if (saved) recordings_added();
+        if (saved) {
+            uint64_t size = irec::HEADER_SIZE + static_cast<uint64_t>(c.count) * recording::BYTES_PER_SAMPLE;
+            recordings_put(job.id, header, size);
+        }
         taskENTER_CRITICAL(&outcome_lock);
         last_outcome = {true, job.id, saved, c.overrun, c.count, job.rate_hz};
         taskEXIT_CRITICAL(&outcome_lock);

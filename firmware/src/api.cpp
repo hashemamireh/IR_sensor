@@ -199,24 +199,25 @@ static esp_err_t handle_recordings_list(httpd_req_t* req) {
     DeviceLock lock;
     if (!api::route_allowed(device_state(), Route::RecordingsList)) return send_busy(req);
 
-    // Streamed one entry per chunk — the list can hold hundreds of recordings
-    char buf[256];
+    // From the in-RAM index, streamed in ~1 KB chunks — the list can hold
+    // thousands of recordings (one entry is ~200 bytes)
+    static constexpr size_t FLUSH_AT = 1024;
+    char buf[FLUSH_AT + 256];
     JsonWriter w(buf, sizeof(buf));
     w.begin_object().key("recordings").begin_array();
     httpd_resp_set_type(req, "application/json");
 
     esp_err_t err = ESP_OK;
-    bool readable = recordings_for_each([&](uint32_t id, const irec::Header& h, uint64_t size) {
+    recordings_for_each([&](uint32_t id, const irec::Header& h, uint64_t size) {
         if (err != ESP_OK) return;
         api::write_recording(w, id, h, size);
         if (!w.ok()) {
             err = ESP_FAIL;
-            return;
+        } else if (w.length() >= FLUSH_AT) {
+            err = httpd_resp_send_chunk(req, w.c_str(), w.length());
+            w.clear_buffer();
         }
-        err = httpd_resp_send_chunk(req, w.c_str(), w.length());
-        w.clear_buffer();
     });
-    if (!readable) return send_error(req, "500 Internal Server Error", "storage_error");
     if (err != ESP_OK) return err;
 
     w.end_array().end_object();

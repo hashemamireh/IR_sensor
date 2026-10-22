@@ -180,6 +180,7 @@ static Result compress_one(uint32_t id) {
     } else {
         ESP_LOGI(TAG, "%s: %llu → %llu bytes", path, (unsigned long long)data_bytes,
                  (unsigned long long)sink.written);
+        recordings_put(id, out, irec::HEADER_SIZE + sink.written);
         return Result::Compressed;
     }
     unlink(tmp);

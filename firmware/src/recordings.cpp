@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "nvs.h"
@@ -23,8 +24,24 @@ static const char* TAG = "recordings";
 
 static constexpr const char* KEY_NEXT_ID = "next_rec_id";
 
+struct Entry {
+    uint32_t     id;
+    irec::Header header;
+    uint64_t     size_bytes;
+};
+
+// Sorted by ID. Large indexes land in PSRAM via malloc; it's never touched
+// during capture, since everything that uses it is refused while recording.
+static std::vector<Entry>    index_;
+static SemaphoreHandle_t     index_lock = nullptr;
 static std::atomic<uint32_t> count{0};
-static uint32_t next_id = 1;
+static uint32_t              next_id = 1;
+
+class IndexLock {
+public:
+    IndexLock()  { xSemaphoreTake(index_lock, portMAX_DELAY); }
+    ~IndexLock() { xSemaphoreGive(index_lock); }
+};
 
 static bool ends_with(const char* s, const char* suffix) {
     size_t n = strlen(s), m = strlen(suffix);
@@ -57,7 +74,30 @@ static void remove_temp_files() {
     closedir(dir);
 }
 
+// Reads one file's header from flash — only at boot
+static bool read_entry(uint32_t id, Entry* out) {
+    char path[48];
+    recording::path_for_id(id, path, sizeof(path));
+    struct stat st;
+    FILE* f = (stat(path, &st) == 0) ? fopen(path, "rb") : nullptr;
+    if (!f) return false;
+
+    uint8_t raw[irec::HEADER_SIZE];
+    bool valid = fread(raw, 1, sizeof(raw), f) == sizeof(raw) && irec::decode_header(raw, &out->header);
+    fclose(f);
+    if (!valid) {
+        ESP_LOGW(TAG, "Skipping %s: bad header", path);
+        return false;
+    }
+    out->id         = id;
+    out->size_bytes = st.st_size;
+    return true;
+}
+
 void recordings_init() {
+    index_lock = xSemaphoreCreateMutex();
+    configASSERT(index_lock);
+
     if (mkdir(recording::DIR, 0775) != 0 && errno != EEXIST) {
         ESP_LOGE(TAG, "Can't create %s: %s", recording::DIR, strerror(errno));
         return;
@@ -66,9 +106,13 @@ void recordings_init() {
 
     std::vector<uint32_t> ids;
     scan_ids(&ids);
-    count = ids.size();
+    for (uint32_t id : ids) {
+        Entry e;
+        if (read_entry(id, &e)) index_.push_back(e);
+    }
+    count = index_.size();
 
-    // Never hand out an ID that's on flash, even if NVS was erased
+    // Never hand out an ID that's on flash (even a bad file's), even if NVS was erased
     uint32_t stored = 1;
     nvs_handle_t h;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
@@ -78,31 +122,40 @@ void recordings_init() {
     uint32_t after_existing = ids.empty() ? 1 : ids.back() + 1;
     next_id = std::max(stored, after_existing);
 
-    ESP_LOGI(TAG, "%u recordings, next ID %lu", (unsigned)ids.size(), (unsigned long)next_id);
+    ESP_LOGI(TAG, "%u recordings, next ID %lu", (unsigned)index_.size(), (unsigned long)next_id);
 }
 
 uint32_t recordings_count() { return count.load(); }
 
-bool recordings_for_each(const RecordingVisitor& visit) {
-    std::vector<uint32_t> ids;
-    if (!scan_ids(&ids)) return false;
-
-    for (uint32_t id : ids) {
-        char path[48];
-        recording::path_for_id(id, path, sizeof(path));
-        struct stat st;
-        FILE* f = (stat(path, &st) == 0) ? fopen(path, "rb") : nullptr;
-        if (!f) continue;
-
-        uint8_t raw[irec::HEADER_SIZE];
-        irec::Header h;
-        bool valid = fread(raw, 1, sizeof(raw), f) == sizeof(raw) && irec::decode_header(raw, &h);
-        fclose(f);
-
-        if (valid) visit(id, h, st.st_size);
-        else ESP_LOGW(TAG, "Skipping %s: bad header", path);
+void recordings_for_each(const RecordingVisitor& visit) {
+    // Visit a copy: the visitor may be slow (e.g. sending each entry over HTTP)
+    std::vector<Entry> snapshot;
+    {
+        IndexLock lock;
+        snapshot = index_;
     }
-    return true;
+    for (const Entry& e : snapshot) visit(e.id, e.header, e.size_bytes);
+}
+
+void recordings_put(uint32_t id, const irec::Header& h, uint64_t size_bytes) {
+    IndexLock lock;
+    auto it = std::lower_bound(index_.begin(), index_.end(), id,
+                               [](const Entry& e, uint32_t v) { return e.id < v; });
+    if (it != index_.end() && it->id == id) {
+        it->header     = h;
+        it->size_bytes = size_bytes;
+    } else {
+        index_.insert(it, {id, h, size_bytes});
+    }
+    count = index_.size();
+}
+
+static void index_remove(uint32_t id) {
+    IndexLock lock;
+    auto it = std::lower_bound(index_.begin(), index_.end(), id,
+                               [](const Entry& e, uint32_t v) { return e.id < v; });
+    if (it != index_.end() && it->id == id) index_.erase(it);
+    count = index_.size();
 }
 
 FILE* recordings_open(uint32_t id, uint64_t* size_bytes) {
@@ -118,13 +171,14 @@ esp_err_t recordings_delete(uint32_t id) {
     char path[48];
     if (!recording::path_for_id(id, path, sizeof(path))) return ESP_ERR_NOT_FOUND;
     if (unlink(path) != 0) return errno == ENOENT ? ESP_ERR_NOT_FOUND : ESP_FAIL;
-    count--;
+    index_remove(id);
     storage_refresh();
     ESP_LOGI(TAG, "Deleted %s", path);
     return ESP_OK;
 }
 
 uint32_t recordings_delete_all() {
+    // From the directory, not the index, so files with a bad header go too
     std::vector<uint32_t> ids;
     scan_ids(&ids);
 
@@ -132,19 +186,16 @@ uint32_t recordings_delete_all() {
     for (uint32_t id : ids) {
         char path[48];
         recording::path_for_id(id, path, sizeof(path));
-        if (unlink(path) == 0) deleted++;
+        if (unlink(path) == 0) {
+            deleted++;
+            index_remove(id);
+        }
         vTaskDelay(1);  // let lower-priority tasks and the idle task run
     }
-
-    std::vector<uint32_t> left;
-    scan_ids(&left);
-    count = left.size();
     storage_refresh();
     ESP_LOGI(TAG, "Deleted %lu recordings", (unsigned long)deleted);
     return deleted;
 }
-
-void recordings_added() { count++; }
 
 uint32_t recordings_allocate_id() {
     if (next_id > recording::MAX_ID) return 0;
