@@ -237,6 +237,7 @@ more accurate state-of-charge estimation.
 | Technique | Single I2C register read — the MAX17043 continuously tracks voltage and SoC internally |
 | During recording | **Safe to read** — uses I2C, not ADC; no conflict with OPT101 DMA continuous mode. However, reads are deferred during recording to minimize I2C bus activity (the OLED is also frozen). A read is taken immediately before and after each recording. |
 | Data returned | Voltage (mV) from VCELL register; SoC (%) from SOC register |
+| Deep sleep | Put into its < 1 µA sleep mode (CONFIG.SLEEP) right before the ESP32 sleeps; cleared on every boot. ModelGauge™ is voltage-based, so SoC re-converges after waking; the first read is delayed ~1 s. |
 
 ### 5.4. Advantages Over ADC Voltage Divider
 
@@ -373,13 +374,16 @@ From the **Status Screen** (shown on wake), a **short press** opens the **Main M
   brief wake on accidental presses.
 - **Power draw**: the ESP32-C5 itself is ≈ 10–30 µA with GPIO wake (the button's internal pull-up
   keeps the RTC peripheral domain on), but everything on the 3V3 rail stays powered:
-  - OPT101: **≈ 120 µA** quiescent (datasheet, dark; 220 µA at full output)
-  - MAX17043: ≈ 50 µA (it has a < 1 µA sleep mode, unused so far)
+  - OPT101: **≈ 120 µA** quiescent (datasheet, dark) — stays on the 3V3 rail by choice: on a
+    1000 mAh cell that's still months of standby, and LiPo self-discharge (≈ 2–5 %/month) is in
+    the same range. Powering it from a GPIO remains an option if measurements call for it.
+  - MAX17043: < 1 µA in sleep mode (§5.3)
   - OLED in display-off mode: a few µA
-  - Board-level parts (regulator quiescent current, any power LED) — measure on hardware
+  - Board-level parts (regulator quiescent current, any power LED) — **measure on hardware**;
+    these may well dominate
 
-  So expect ≈ 200 µA unless the OPT101 is powered from a GPIO (it needs < 1 mA) and switched off
-  in sleep.
+  So expect ≈ 150 µA plus whatever the board itself draws (≈ 9 months of standby on 1000 mAh
+  before the board's share).
 
 ### 7.2. Screen Power Saving
 

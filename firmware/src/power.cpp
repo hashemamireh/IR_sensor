@@ -8,6 +8,7 @@
 #include "esp_sleep.h"
 #include "esp_timer.h"
 
+#include "battery.h"
 #include "config.h"
 #include "device_state.h"
 #include "display.h"
@@ -65,6 +66,7 @@ bool power_deep_sleep() {
     display_set_power(false);
     led_set({0, 0, 0});
     wifi_ap_set_enabled(false);
+    battery_sleep();
 
     // A held button would wake us immediately
     for (int i = 0; i < 300 && encoder_button_pressed(); i++) vTaskDelay(pdMS_TO_TICKS(10));
