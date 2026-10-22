@@ -59,6 +59,19 @@ Error validate(uint32_t rate_hz, uint32_t duration_s, uint64_t free_bytes);
 // Short machine-readable name for API error responses, e.g. "invalid_rate".
 const char* error_str(Error e);
 
+// Result of asking the recorder to start (from the API or the device menu).
+enum class StartResult { Ok, Busy, InvalidRate, InvalidDuration, InsufficientSpace, StorageError };
+
+// How the most recent recording ended — shown on the OLED status screen.
+struct Outcome {
+    bool     valid    = false;  // false until the first recording since boot
+    uint32_t id       = 0;
+    bool     saved    = false;
+    bool     overrun  = false;
+    uint32_t samples  = 0;
+    uint32_t rate_hz  = 0;      // nominal
+};
+
 // "/data/recordings/00042.irec". False if id > MAX_ID or buf is too small.
 bool path_for_id(uint32_t id, char* buf, size_t len);
 

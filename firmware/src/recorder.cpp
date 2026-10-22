@@ -49,6 +49,8 @@ static Job                   current{};  // written before the job is queued
 static std::atomic<bool>     stop_requested{false};
 static std::atomic<uint32_t> samples_captured{0};
 static std::atomic<bool>     pool_overflowed{false};
+static recording::Outcome    last_outcome;
+static portMUX_TYPE          outcome_lock = portMUX_INITIALIZER_UNLOCKED;
 
 // Internal RAM: DMA results are parsed here, and the save copies through
 // here because flash writes disable the cache that PSRAM is read through
@@ -233,8 +235,8 @@ static bool save(const Job& job, uint64_t start_utc_us, const Capture& c) {
 // ── Task ────────────────────────────────────────────────────────────────────
 
 static void run(const Job& job) {
-    // ponytail: freeze the OLED on "Recording..." and pulse the LED red (step 5)
-
+    // The UI task follows the state: it freezes the OLED on the recording
+    // screen and pulses the LED red (spec §6.2)
     timeval tv;
     gettimeofday(&tv, nullptr);
     const uint64_t start_utc_us = static_cast<uint64_t>(tv.tv_sec) * 1000000 + tv.tv_usec;
@@ -253,15 +255,18 @@ static void run(const Job& job) {
     device_set_state(api::DeviceState::Saving);
     vTaskPrioritySet(nullptr, RECORDER_SAVE_PRIORITY);
     bool saved = save(job, start_utc_us, c);
+    storage_refresh();
     vTaskPrioritySet(nullptr, RECORDER_CAPTURE_PRIORITY);
 
     battery_read_now();  // reading right after the recording (spec §5.3)
     {
         DeviceLock lock;
         if (saved) recordings_added();
-        device_set_state(api::DeviceState::Idle);
+        taskENTER_CRITICAL(&outcome_lock);
+        last_outcome = {true, job.id, saved, c.overrun, c.count, job.rate_hz};
+        taskEXIT_CRITICAL(&outcome_lock);
+        device_set_state(api::DeviceState::Idle);  // the UI shows the summary
     }
-    // ponytail: show the result summary on the OLED and set the LED back (step 5)
 }
 
 static void task_recorder(void*) {
@@ -330,5 +335,12 @@ bool recorder_stop(uint32_t* id) {
 
 RecorderProgress recorder_progress() {
     uint32_t rate = current.rate_hz ? current.rate_hz : 1;
-    return {current.id, samples_captured.load() / rate, current.duration_s};
+    return {current.id, samples_captured.load() / rate, current.duration_s, current.rate_hz};
+}
+
+recording::Outcome recorder_last_outcome() {
+    taskENTER_CRITICAL(&outcome_lock);
+    recording::Outcome o = last_outcome;
+    taskEXIT_CRITICAL(&outcome_lock);
+    return o;
 }

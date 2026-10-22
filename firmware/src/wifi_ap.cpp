@@ -22,6 +22,8 @@ static constexpr const char* KEY_PASSWORD = "wifi_password";
 static char ssid[32] = "";
 static char password[WIFI_PASSWORD_LEN + 1] = "";
 
+static bool password_new = false;
+
 static std::atomic<int>  clients{0};
 static std::atomic<bool> enabled{false};
 
@@ -29,6 +31,7 @@ const char* wifi_ap_ssid()             { return ssid; }
 const char* wifi_ap_password()         { return password; }
 bool        wifi_ap_client_connected() { return clients.load() > 0; }
 bool        wifi_ap_enabled()          { return enabled.load(); }
+bool        wifi_ap_password_is_new()  { return password_new; }
 
 // Loads the AP password from NVS, generating one on first boot (spec §8.1)
 static void load_or_create_password() {
@@ -49,6 +52,7 @@ static void load_or_create_password() {
 
         ESP_ERROR_CHECK(nvs_set_str(h, KEY_PASSWORD, password));
         ESP_ERROR_CHECK(nvs_commit(h));
+        password_new = true;
         ESP_LOGI(TAG, "Generated new SoftAP password");
     }
     nvs_close(h);
@@ -100,7 +104,7 @@ void wifi_ap_init() {
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
     ESP_ERROR_CHECK(wifi_ap_set_enabled(true));
 
-    // ponytail: password goes to the serial log until the OLED can show it
+    // Also on the OLED (first boot, and WiFi → Show SSID & IP)
     ESP_LOGI(TAG, "SoftAP started — SSID: %s, password: %s", ssid, password);
 }
 

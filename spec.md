@@ -72,8 +72,10 @@ The ESP32-C5's GDMA controller offloads ADC sampling entirely to hardware:
 - The firmware drains DMA buffers in a high-priority FreeRTOS task, converting each 4-byte DMA
   result (`adc_continuous_parse_data()`) to a `uint16` sample and appending it to a **PSRAM
   recording buffer that holds the entire recording**.
-- **Nothing is written to flash during a recording.** On the ESP32-C5, flash and PSRAM share the
-  SPI cache, so a flash write/erase stalls PSRAM access. Buffering the whole recording in PSRAM
+- **Flash is not accessed during a recording — neither written nor read.** On the ESP32-C5,
+  flash and PSRAM share the SPI cache, so a flash operation stalls PSRAM access. (Storage usage
+  for `/api/status` and the status bar is therefore cached in RAM and refreshed only after files
+  are written or deleted.) Buffering the whole recording in PSRAM
   and saving it after capture stops removes that contention entirely (see §4.4 for the resulting
   duration limits).
 - The ESP-IDF WiFi driver task runs at priority 23 — above all application tasks — and can
@@ -265,7 +267,8 @@ The 128×64 OLED has a fixed hardware color split:
 Contents:
 - **Battery**: Percentage + voltage (e.g., `78% 3.9V`)
 - **Free storage**: In MB (e.g., `15.2MB`)
-- **Connection indicator**: Icon or symbol when a tablet is connected via WiFi
+- **Connection indicator**: `AP` while the access point is on; shown inverted (filled box) when
+  a tablet is connected
 
 #### Content Area (Blue Zone)
 
@@ -288,9 +291,9 @@ Shows the current screen context: status screen, menu, or recording feedback.
 | Color | Pattern | Meaning |
 | :--- | :--- | :--- |
 | 🟢 Green | Steady | Idle, ready |
-| 🔴 Red | Pulsing | Recording in progress |
-| 🔵 Blue | Steady | Tablet connected (overlays with green → cyan/alternating) |
-| 🟡 Amber | Steady | Low battery warning |
+| 🔴 Red | Pulsing | Recording in progress (also while saving) |
+| 🔵 Blue | Steady | Tablet connected (overlays with green → cyan) |
+| 🟡 Amber | Steady | Low battery warning (≤ 15%) — takes precedence over cyan/green |
 | Off | — | Deep sleep |
 
 ### 6.4. Menu Structure
@@ -316,7 +319,7 @@ From the **Status Screen** (shown on wake), a **short press** opens the **Main M
 │   └── Set Sample Rate → [1 kHz │ 5 kHz │ 10 kHz │ 20 kHz]
 │
 ├── 📂 Recordings
-│   ├── [Recording 1 — 2026-10-01 14:23, 30s @ 10kHz]
+│   ├── [#42 10-01 14:23 30s]  (newest first; times in UTC)
 │   │   ├── View Info (duration, size, sample rate, timestamp)
 │   │   └── Delete → [Confirm? Yes / No]
 │   ├── [Recording 2 — ...]
@@ -368,8 +371,10 @@ From the **Status Screen** (shown on wake), a **short press** opens the **Main M
 
 ### 7.2. Screen Power Saving
 
-- After the configured timeout (default: 1 minute), the OLED is turned off to save power.
-- Any rotary encoder interaction wakes the screen.
+- After the configured timeout (default: 1 minute), the OLED is turned off to save power. The
+  timeout only applies while idle.
+- Any rotary encoder interaction wakes the screen (and is otherwise ignored). A device state
+  change — e.g. a recording started from the app, or one finishing — also wakes it.
 
 ### 7.3. Timekeeping Across Deep Sleep
 
@@ -520,7 +525,7 @@ While connected:
 | ESP-IDF `esp_lcd` (SSD1306 panel) | OLED display driver (I2C), with a small framebuffer + font |
 | MAX17043 driver | I2C fuel gauge — battery voltage and SoC% readings |
 | FastLED or ESP-IDF RMT | WS2812B RGB LED control |
-| ESP-IDF PCNT + `espressif/button` | Encoder rotation (hardware quadrature decoding) and short/long press detection |
+| ESP-IDF PCNT + own `ButtonDetector` | Encoder rotation (hardware quadrature decoding); debounced short/long press detection (small, host-tested — no extra component) |
 | ESP-IDF ADC Calibration | Curve fitting calibration |
 | miniz (in ESP32-C5 ROM) | Optional zlib recording compression — no extra library needed |
 

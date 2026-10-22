@@ -19,9 +19,12 @@ static constexpr int      RECORDER_SAVE_PRIORITY    = 4;  // below HTTP so statu
 // --- Battery monitor ---
 static constexpr uint32_t BATTERY_READ_INTERVAL_MS = 30000;  // 30 seconds
 
-// --- Display ---
-static constexpr int      OLED_WIDTH  = 128;
+// --- Display & input — check on hardware ---
 static constexpr int      OLED_HEIGHT = 64;
+static constexpr bool     OLED_FLIP   = false;  // rotate 180° if the module is mounted upside down
+static constexpr int      ENCODER_COUNTS_PER_DETENT = 4;  // KY-040: one full quadrature cycle per click
+static constexpr int      ENCODER_DIRECTION = 1;          // -1 if clockwise moves up the menu
+static constexpr uint32_t UI_TICK_MS = 10;
 
 // --- WiFi SoftAP ---
 static constexpr const char* WIFI_AP_PREFIX = "IRSensor-";

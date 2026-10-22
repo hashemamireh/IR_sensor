@@ -34,6 +34,15 @@ pio run -t upload          # flash (connect board via USB-C)
 pio device monitor         # serial monitor @ 115200 baud
 ```
 
+### OLED Screen Previews (no board needed)
+
+The menu tests can dump every screen they visit; `tools/oled_preview.py` turns those into a PNG:
+
+```sh
+mkdir -p /tmp/oled && UI_PREVIEW_DIR=/tmp/oled pio test -e native -f test_menu
+python3 tools/oled_preview.py /tmp/oled oled_screens.png
+```
+
 ### Synthetic Build (no sensor needed)
 
 `irsensor_synthetic` is the same firmware, except the recorder generates a fake OPT101 signal (noisy baseline with a 5 ms pulse every 250 ms) instead of reading the ADC. Use it to check the whole recording pipeline — capture, save, list, download — on a bare board:
@@ -72,12 +81,14 @@ firmware/
     ├── battery.cpp/.h          # MAX17043 fuel gauge + monitor task
     ├── calibration.cpp/.h      # ADC raw → mV (eFuse curve fitting)
     ├── device_state.cpp/.h     # idle/recording/… state + lock for flash work
-    ├── encoder.cpp/.h          # Rotary encoder + button
+    ├── display.cpp/.h          # SSD1306 OLED via esp_lcd
+    ├── encoder.cpp/.h          # Rotary encoder (PCNT) + raw button
     ├── led.cpp/.h              # WS2812B status LED
     ├── recorder.cpp/.h         # ADC continuous capture → PSRAM → IREC file
     ├── recordings.cpp/.h       # Recording files: index, list, delete, ID counter
     ├── settings_store.cpp/.h   # User settings in NVS
-    ├── storage.cpp/.h          # LittleFS mount + usage info
+    ├── storage.cpp/.h          # LittleFS mount + cached usage info
+    ├── ui.cpp/.h               # UI task: input → menu → OLED, LED, screen timeout
     ├── wifi_ap.cpp/.h          # WiFi SoftAP, generated password, client events
     ├── idf_component.yml       # ESP-IDF component dependencies
     └── CMakeLists.txt          # Source list for ESP-IDF build
@@ -87,8 +98,13 @@ firmware/
 │   ├── settings.*              # Settings defaults, validation, JSON
 │   ├── json_writer.*           # Streaming JSON writer
 │   ├── api_model.*             # Device state, 409 gating, status/recording JSON
-│   └── synthetic.*             # Fake OPT101 signal for the synthetic build
-└── test/                       # Host-side Unity tests for lib/irsensor_core
+│   ├── synthetic.*             # Fake OPT101 signal for the synthetic build
+│   ├── menu.*                  # OLED screens + menu state machine (spec §6.4)
+│   ├── framebuffer.*           # 128×64 framebuffer (SSD1306 layout) + 5×7 font
+│   ├── button.*                # Debounced short/long press detection
+│   └── led_color.*             # Status LED colour scheme (spec §6.3)
+├── test/                       # Host-side Unity tests for lib/irsensor_core
+└── tools/oled_preview.py       # Renders the menu tests' screens to a PNG
 ```
 
 Code in `lib/irsensor_core` must not include ESP-IDF headers, so it keeps building for the `native` test environment.
@@ -188,6 +204,8 @@ Recording constants live in [`lib/irsensor_core/recording.h`](lib/irsensor_core/
 | `recording::MAX_DURATION_S` | 300 | Cap at 1–10 kHz (≈ 6 MB at 10 kHz) |
 | `recording::MAX_DURATION_20KHZ_S` | 120 | Cap at 20 kHz (PSRAM budget) |
 | `ADC_POOL_BYTES` (`config.h`) | 16 KB | DMA result pool — ~200 ms at 20 kHz; raise if recordings report overrun |
+| `OLED_FLIP` (`config.h`) | false | Rotate the display 180° |
+| `ENCODER_COUNTS_PER_DETENT` / `ENCODER_DIRECTION` (`config.h`) | 4 / 1 | Encoder tuning — adjust if one click moves more/less than one item, or the wrong way |
 | `settings::Settings::default_duration_s` | 30 | Default recording length |
 
 Other device constants are in [`include/config.h`](include/config.h), e.g. `BATTERY_READ_INTERVAL_MS` (30 000).

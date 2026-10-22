@@ -9,6 +9,7 @@
  *   recordings     — recording files: index, list, delete, IDs
  *   calibration    — ADC raw → mV (eFuse curve fitting)
  *   recorder       — ADC capture → PSRAM → IREC file
+ *   ui             — OLED menu, encoder, status LED (display, encoder, led)
  *   battery  — MAX17043 fuel gauge
  *   led      — WS2812B status LED
  *   encoder  — rotary encoder + button
@@ -34,6 +35,7 @@
 #include "recordings.h"
 #include "settings_store.h"
 #include "storage.h"
+#include "ui.h"
 #include "wifi_ap.h"
 
 static const char* TAG = "irsensor";
@@ -68,15 +70,6 @@ static i2c_master_bus_handle_t init_i2c() {
     return bus;
 }
 
-// ── FreeRTOS Tasks ──────────────────────────────────────────────────────────
-
-static void task_ui(void* arg) {
-    // ponytail: placeholder loop — OLED draw + encoder read goes here
-    for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-}
-
 // ── app_main ────────────────────────────────────────────────────────────────
 
 extern "C" void app_main() {
@@ -97,8 +90,8 @@ extern "C" void app_main() {
     api_start();
 
     // Task priorities per spec §9.3 (single-core, so priorities matter);
-    // the recorder task is created by recorder_init()
-    xTaskCreate(task_ui, "ui", 4096, nullptr, 2, nullptr);
+    // the recorder and UI tasks are created by recorder_init() and ui_start()
+    ui_start(i2c_bus);
     battery_start_task();
 
     ESP_LOGI(TAG, "=== All subsystems initialized ===");

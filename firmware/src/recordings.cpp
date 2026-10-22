@@ -17,6 +17,7 @@
 
 #include "config.h"
 #include "recording.h"
+#include "storage.h"
 
 static const char* TAG = "recordings";
 
@@ -118,6 +119,7 @@ esp_err_t recordings_delete(uint32_t id) {
     if (!recording::path_for_id(id, path, sizeof(path))) return ESP_ERR_NOT_FOUND;
     if (unlink(path) != 0) return errno == ENOENT ? ESP_ERR_NOT_FOUND : ESP_FAIL;
     count--;
+    storage_refresh();
     ESP_LOGI(TAG, "Deleted %s", path);
     return ESP_OK;
 }
@@ -137,6 +139,7 @@ uint32_t recordings_delete_all() {
     std::vector<uint32_t> left;
     scan_ids(&left);
     count = left.size();
+    storage_refresh();
     ESP_LOGI(TAG, "Deleted %lu recordings", (unsigned long)deleted);
     return deleted;
 }
