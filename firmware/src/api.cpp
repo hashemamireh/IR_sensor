@@ -1,12 +1,13 @@
 #include "api.h"
 
-#include <cstdio>
-
 #include "esp_http_server.h"
 #include "esp_log.h"
 
+#include "api_model.h"
 #include "battery.h"
+#include "json_writer.h"
 #include "storage.h"
+#include "wifi_ap.h"
 
 static const char* TAG = "api";
 
@@ -16,13 +17,21 @@ static esp_err_t handle_status(httpd_req_t* req) {
     size_t total = 0, used = 0;
     storage_info(&total, &used);
 
-    char buf[128];
-    snprintf(buf, sizeof(buf),
-             "{\"state\":\"idle\",\"battery_pct\":%u,\"battery_mv\":%u,\"free_kb\":%zu}",
-             battery_pct(), battery_mv(), (total - used) / 1024);
+    api::StatusInfo s;
+    s.battery_mv  = battery_mv();
+    s.battery_pct = battery_pct();
+    s.free_bytes  = total - used;
+    s.ssid        = wifi_ap_ssid();
+    // ponytail: state, recording count and client_connected are filled in
+    // as the recorder, recording index and WiFi events land
+
+    char buf[320];
+    JsonWriter w(buf, sizeof(buf));
+    api::write_status(w, s);
+    if (!w.ok()) return httpd_resp_send_500(req);
 
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
+    return httpd_resp_send(req, w.c_str(), w.length());
 }
 
 void api_start() {

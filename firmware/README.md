@@ -34,6 +34,14 @@ pio run -t upload          # flash (connect board via USB-C)
 pio device monitor         # serial monitor @ 115200 baud
 ```
 
+### Unit Tests (no board needed)
+
+Hardware-independent logic lives in `lib/irsensor_core` and is tested on the host with Unity:
+
+```sh
+pio test -e native
+```
+
 PlatformIO will automatically fetch ESP-IDF and the managed components (`littlefs`, `led_strip`) on the first build.
 
 ## Project Structure
@@ -46,7 +54,7 @@ firmware/
 ├── boards/
 │   └── waveshare_esp32c5_n32r8.json  # Custom board definition
 ├── include/
-│   ├── config.h                # App-level constants (sample rates, IREC format, etc.)
+│   ├── config.h                # App-level constants (battery interval, WiFi, storage label)
 │   └── pins.h                  # GPIO / I2C / ADC pin assignments
 └── src/
     ├── main.cpp                # Entry point — initializes all subsystems & tasks
@@ -58,7 +66,16 @@ firmware/
     ├── wifi_ap.cpp/.h          # WiFi SoftAP
     ├── idf_component.yml       # ESP-IDF component dependencies
     └── CMakeLists.txt          # Source list for ESP-IDF build
+├── lib/irsensor_core/          # Hardware-independent logic (no ESP-IDF includes)
+│   ├── irec.*                  # IREC header encode/decode, CRC-32
+│   ├── recording.*             # Rates, duration caps, free-space check, IDs/filenames
+│   ├── settings.*              # Settings defaults, validation, JSON
+│   ├── json_writer.*           # Streaming JSON writer
+│   └── api_model.*             # Device state, 409 gating, status/recording JSON
+└── test/                       # Host-side Unity tests for lib/irsensor_core
 ```
+
+Code in `lib/irsensor_core` must not include ESP-IDF headers, so it keeps building for the `native` test environment.
 
 ## Pin Map
 
@@ -141,14 +158,16 @@ cp boards/waveshare_esp32c5_n32r8.json ~/.platformio/platforms/espressif32/board
 
 ## Configuration
 
-Key constants live in [`include/config.h`](include/config.h):
+Recording constants live in [`lib/irsensor_core/recording.h`](lib/irsensor_core/recording.h), settings defaults in [`settings.h`](lib/irsensor_core/settings.h):
 
 | Constant | Default | Description |
 | :--- | :--- | :--- |
-| `DEFAULT_SAMPLE_RATE_HZ` | 10 000 | ADC sample rate |
-| `DEFAULT_DURATION_S` | 30 | Default recording length |
-| `MAX_DURATION_S` | 300 | Hard cap (≈ 6 MB at 10 kHz) |
-| `BATTERY_READ_INTERVAL_MS` | 30 000 | Fuel gauge polling interval |
+| `recording::DEFAULT_SAMPLE_RATE_HZ` | 10 000 | ADC sample rate |
+| `recording::MAX_DURATION_S` | 300 | Cap at 1–10 kHz (≈ 6 MB at 10 kHz) |
+| `recording::MAX_DURATION_20KHZ_S` | 120 | Cap at 20 kHz (PSRAM budget) |
+| `settings::Settings::default_duration_s` | 30 | Default recording length |
+
+Other device constants are in [`include/config.h`](include/config.h), e.g. `BATTERY_READ_INTERVAL_MS` (30 000).
 
 Pin assignments are in [`include/pins.h`](include/pins.h). The custom partition table is in [`partitions.csv`](partitions.csv).
 

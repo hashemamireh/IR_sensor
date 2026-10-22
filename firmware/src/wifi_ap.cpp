@@ -13,6 +13,10 @@
 
 static const char* TAG = "wifi";
 
+static char ssid[32] = "";
+
+const char* wifi_ap_ssid() { return ssid; }
+
 void wifi_ap_init() {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -24,7 +28,6 @@ void wifi_ap_init() {
     // Build SSID from last 4 hex chars of MAC
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
-    char ssid[32];
     snprintf(ssid, sizeof(ssid), "%s%02X%02X", WIFI_AP_PREFIX, mac[4], mac[5]);
 
     wifi_config_t ap_cfg = {};
