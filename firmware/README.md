@@ -95,7 +95,7 @@ The device runs as a **WiFi SoftAP** (`IRSensor-XXXX`). The companion app connec
 
 ### Recording Format (IREC)
 
-32-byte header followed by `uint16_le[]` ADC samples (2 bytes each). Includes CRC32, UTC timestamp, and an optional zlib compression flag. See [`overview.md`](../overview.md) §4.2 for the full spec.
+32-byte header followed by `uint16_le[]` ADC samples (2 bytes each). Includes CRC32, UTC timestamp, and an optional zlib compression flag. See [`spec.md`](../spec.md) §4.2 for the full spec.
 
 ## Known Build Issues
 

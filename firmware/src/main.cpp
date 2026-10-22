@@ -1,7 +1,7 @@
 /*
  * IR Sensor Device — Main Firmware
  *
- * Initializes all subsystems per overview.md §9:
+ * Initializes all subsystems per spec.md §9:
  *   - NVS (settings persistence)
  *   - LittleFS (recording storage)
  *   - I2C bus (OLED + MAX17043)

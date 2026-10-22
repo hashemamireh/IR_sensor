@@ -552,7 +552,7 @@ The app stores downloaded recordings locally on the tablet filesystem (via Tauri
 
 ```
 IR_sensor/
-├── overview.md                          ← This document
+├── spec.md                              ← This document
 ├── wiring_diagram.md                    ← Wiring connections (TBD)
 ├── docs/
 │   └── external/

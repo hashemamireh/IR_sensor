@@ -2,7 +2,7 @@
 
 > **Hardware Reference**: [`ESP32-C5-WIFI6-KIT-N32R8.md`](./docs/external/ESP32-C5-WIFI6-KIT-N32R8.md)
 >
-> **Project Overview**: [`overview.md`](./overview.md)
+> **Project Spec**: [`spec.md`](./spec.md)
 
 ---
 
