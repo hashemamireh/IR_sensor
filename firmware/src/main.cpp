@@ -8,6 +8,7 @@
  *   settings_store — user settings in NVS
  *   recordings     — recording files: index, list, delete, IDs
  *   calibration    — ADC raw → mV (eFuse curve fitting)
+ *   recorder       — ADC capture → PSRAM → IREC file
  *   battery  — MAX17043 fuel gauge
  *   led      — WS2812B status LED
  *   encoder  — rotary encoder + button
@@ -29,6 +30,7 @@
 #include "device_state.h"
 #include "encoder.h"
 #include "led.h"
+#include "recorder.h"
 #include "recordings.h"
 #include "settings_store.h"
 #include "storage.h"
@@ -90,11 +92,12 @@ extern "C" void app_main() {
     battery_init(i2c_bus);
     led_init();
     encoder_init();
-    wifi_ap_init();
+    wifi_ap_init();  // before the ADC is used: its password generator borrows the ADC
+    recorder_init();
     api_start();
 
-    // Task priorities per spec §9.3 (single-core, so priorities matter)
-    // ADC DMA drain + storage flush tasks are created on-demand when recording starts
+    // Task priorities per spec §9.3 (single-core, so priorities matter);
+    // the recorder task is created by recorder_init()
     xTaskCreate(task_ui, "ui", 4096, nullptr, 2, nullptr);
     battery_start_task();
 

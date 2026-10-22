@@ -9,6 +9,13 @@
 #define OPT101_ADC_ATTEN    ADC_ATTEN_DB_6  // ~0–2.2 V, matches the OPT101 output ceiling (spec §3.2)
 static constexpr int OPT101_ADC_ATTEN_DB = 6;
 
+// --- Recorder (spec §3.3) — tune on hardware ---
+static constexpr uint32_t ADC_FRAME_BYTES = 1024;         // 256 results per DMA frame
+static constexpr uint32_t ADC_POOL_BYTES  = 16 * 1024;    // ~200 ms at 20 kHz, absorbs WiFi preemption
+static constexpr uint32_t SAVE_CHUNK_BYTES = 16 * 1024;   // PSRAM → flash copy size
+static constexpr int      RECORDER_CAPTURE_PRIORITY = 18; // above HTTP (5), below the WiFi driver (23)
+static constexpr int      RECORDER_SAVE_PRIORITY    = 4;  // below HTTP so status polls answer while saving
+
 // --- Battery monitor ---
 static constexpr uint32_t BATTERY_READ_INTERVAL_MS = 30000;  // 30 seconds
 

@@ -18,5 +18,8 @@ void device_state_init() {
 api::DeviceState device_state()           { return state.load(); }
 void device_set_state(api::DeviceState s) { state = s; }
 
-DeviceLock::DeviceLock()  { xSemaphoreTake(lock, portMAX_DELAY); }
-DeviceLock::~DeviceLock() { xSemaphoreGive(lock); }
+DeviceLock::DeviceLock(TickType_t timeout) : held_(xSemaphoreTake(lock, timeout) == pdTRUE) {}
+
+DeviceLock::~DeviceLock() {
+    if (held_) xSemaphoreGive(lock);
+}

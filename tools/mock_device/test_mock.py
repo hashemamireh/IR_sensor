@@ -115,6 +115,7 @@ class MockDeviceTest(unittest.TestCase):
         self.assertEqual(entry["duration_ms"], 3000)
         self.assertEqual(entry["size_bytes"], 32 + 3000 * 2)
         self.assertFalse(entry["compressed"])
+        self.assertFalse(entry["overrun"])
         status = self.request("GET", "/api/status")[1]
         self.assertEqual(status["recording_count"], 1)
         self.assertEqual(status["free_bytes"], free_before - entry["size_bytes"])
@@ -201,15 +202,30 @@ class MockDeviceTest(unittest.TestCase):
             ({"duration_s": 0, "sample_rate_hz": 1000}, "invalid_duration"),
             ({"duration_s": 301, "sample_rate_hz": 10000}, "invalid_duration"),
             ({"duration_s": 121, "sample_rate_hz": 20000}, "invalid_duration"),
-            ({"duration_s": 10}, "invalid_body"),
-            ({"duration_s": "10", "sample_rate_hz": 1000}, "invalid_body"),
+            ({"duration_s": 1.5, "sample_rate_hz": 1000}, "invalid_duration"),
+            # both fields required; rate is checked first (api.cpp handle_record_start)
+            ({"duration_s": 10}, "invalid_rate"),
+            ({"sample_rate_hz": 1000}, "invalid_duration"),
+            ({"duration_s": "10", "sample_rate_hz": 1000}, "invalid_duration"),
+            ({"duration_s": 10, "sample_rate_hz": "1000"}, "invalid_rate"),
+            ({}, "invalid_rate"),
         ]
         for body, error in cases:
             self.assertEqual(self.request("POST", "/api/record", body),
                              (400, {"error": error}), body)
-        self.assertEqual(self.request("POST", "/api/record", b"{nope"),
-                         (400, {"error": "invalid_json"}))
+        for raw, error in [(b"{nope", "invalid_json"), (b"[1, 2]", "invalid_json"),
+                           (b'{"duration_s": NaN, "sample_rate_hz": 1000}', "invalid_json"),
+                           (b"", "invalid_body"), (b" " * 513, "invalid_body")]:
+            self.assertEqual(self.request("POST", "/api/record", raw),
+                             (400, {"error": error}), raw)
         self.assertEqual(self.state(), "idle")
+
+        # whole-number floats are accepted, like cJSON numbers in the firmware
+        code, body = self.request("POST", "/api/record",
+                                  {"duration_s": 5.0, "sample_rate_hz": 1000.0})
+        self.assertEqual((code, body["duration_s"], body["sample_rate_hz"]), (200, 5, 1000))
+        self.request("POST", "/api/record/stop")
+        self.wait_idle()
 
         # the caps themselves are allowed
         self.record(duration_s=120, rate_hz=20000)
@@ -231,10 +247,16 @@ class MockDeviceTest(unittest.TestCase):
 
     def test_delete_all_requires_confirm(self):
         self.device.seed(3)
-        for body in (None, {}, {"confirm": "yes"}, {"confirm": "DELETE_ALL", "x": 1},
-                     ["DELETE_ALL"], b"not json"):
+        for body, error in [
+            (None, "invalid_body"),
+            (b"not json", "invalid_json"),
+            (["DELETE_ALL"], "invalid_json"),
+            ({}, "confirmation_required"),
+            ({"confirm": "yes"}, "confirmation_required"),
+            ({"confirm": "DELETE_ALL", "x": 1}, "confirmation_required"),
+        ]:
             self.assertEqual(self.request("DELETE", "/api/recordings", body),
-                             (400, {"error": "confirmation_required"}), body)
+                             (400, {"error": error}), body)
         self.assertEqual(len(self.recordings()), 3)
 
         self.assertEqual(self.request("DELETE", "/api/recordings", {"confirm": "DELETE_ALL"}),
@@ -253,6 +275,35 @@ class MockDeviceTest(unittest.TestCase):
         self.assertEqual(self.request("GET", "/api/recordings/abc"), (404, {"error": "not_found"}))
         self.assertEqual([r["id"] for r in self.recordings()], [2])
 
+    def test_overrun(self):
+        self.tearDown()
+        self.start_server(server.Device(time_scale=TIME_SCALE, overrun_every=2))
+        self.device.seed(2)
+        rec3 = self.record(duration_s=2, rate_hz=1000)
+        rec4 = self.record_after_idle(duration_s=2, rate_hz=1000)
+        self.wait_idle()
+        recs = {r["id"]: r for r in self.recordings()}
+        self.assertEqual({i: r["overrun"] for i, r in recs.items()},
+                         {1: False, 2: True, 3: False, 4: True})
+        # an overrun recording lost samples, so it's shorter than the time it covered
+        self.assertEqual(recs[rec3]["sample_count"], 2000)
+        self.assertLess(recs[rec4]["sample_count"], 2000)
+        data = self.request("GET", "/api/recordings/%d" % rec4, raw=True)[1]
+        h, _ = self.check_irec(data)
+        self.assertEqual(h["flags"], server.FLAG_OVERRUN)
+
+        # compression keeps the overrun flag
+        self.request("POST", "/api/compress")
+        self.wait_idle()
+        h, _ = self.check_irec(self.request("GET", "/api/recordings/%d" % rec4, raw=True)[1])
+        self.assertEqual(h["flags"], server.FLAG_OVERRUN | server.FLAG_COMPRESSED)
+        self.assertTrue(all(r["compressed"] for r in self.recordings()))
+        self.assertTrue(self.recordings()[1]["overrun"])
+
+    def record_after_idle(self, **kw):
+        self.wait_idle()
+        return self.record(**kw)
+
     # -- time, settings, calibration
 
     def test_time_sync(self):
@@ -265,9 +316,7 @@ class MockDeviceTest(unittest.TestCase):
         entry = self.recordings()[0]
         self.assertEqual(entry["id"], rec_id)
         self.assertAlmostEqual(entry["start_utc_us"], utc_us, delta=5000000)
-        self.assertEqual(self.request("POST", "/api/time", {"utc_us": "now"}),
-                         (400, {"error": "invalid_body"}))
-        for implausible in (0, 1000000, 4102444800 * 1000000):
+        for implausible in ("now", None, -1, 0, 1000000, 4102444800 * 1000000):
             self.assertEqual(self.request("POST", "/api/time", {"utc_us": implausible}),
                              (400, {"error": "invalid_time"}))
 
@@ -280,6 +329,8 @@ class MockDeviceTest(unittest.TestCase):
         self.assertEqual(body["default_duration_s"], 10)
         self.assertEqual(self.request("GET", "/api/settings")[1], body)
 
+        self.assertEqual(self.request("POST", "/api/settings", {"screen_timeout_s": 300.0})[1]
+                         ["screen_timeout_s"], 300)
         self.assertEqual(self.request("POST", "/api/settings", {"screen_timeout_s": 45}),
                          (400, {"error": "invalid_setting", "field": "screen_timeout_s"}))
         self.assertEqual(self.request("POST", "/api/settings", {"wifi_ssid": "x"}),

@@ -34,6 +34,16 @@ pio run -t upload          # flash (connect board via USB-C)
 pio device monitor         # serial monitor @ 115200 baud
 ```
 
+### Synthetic Build (no sensor needed)
+
+`irsensor_synthetic` is the same firmware, except the recorder generates a fake OPT101 signal (noisy baseline with a 5 ms pulse every 250 ms) instead of reading the ADC. Use it to check the whole recording pipeline — capture, save, list, download — on a bare board:
+
+```sh
+pio run -e irsensor_synthetic -t upload
+```
+
+Every recording logs a rough measured sample rate, e.g. `Captured 300000 samples in 30.002 s — ~9999.3 Hz`. With the real ADC build these numbers fill the actual-rate table in `lib/irsensor_core/recording.cpp` (spec §3.5).
+
 ### Unit Tests (no board needed)
 
 Hardware-independent logic lives in `lib/irsensor_core` and is tested on the host with Unity:
@@ -64,6 +74,7 @@ firmware/
     ├── device_state.cpp/.h     # idle/recording/… state + lock for flash work
     ├── encoder.cpp/.h          # Rotary encoder + button
     ├── led.cpp/.h              # WS2812B status LED
+    ├── recorder.cpp/.h         # ADC continuous capture → PSRAM → IREC file
     ├── recordings.cpp/.h       # Recording files: index, list, delete, ID counter
     ├── settings_store.cpp/.h   # User settings in NVS
     ├── storage.cpp/.h          # LittleFS mount + usage info
@@ -75,7 +86,8 @@ firmware/
 │   ├── recording.*             # Rates, duration caps, free-space check, IDs/filenames
 │   ├── settings.*              # Settings defaults, validation, JSON
 │   ├── json_writer.*           # Streaming JSON writer
-│   └── api_model.*             # Device state, 409 gating, status/recording JSON
+│   ├── api_model.*             # Device state, 409 gating, status/recording JSON
+│   └── synthetic.*             # Fake OPT101 signal for the synthetic build
 └── test/                       # Host-side Unity tests for lib/irsensor_core
 ```
 
@@ -123,7 +135,7 @@ The device runs as a **WiFi SoftAP** (`IRSensor-XXXX`). The companion app connec
 | `GET/POST` | `/api/settings` | Read/write device settings |
 | `GET` | `/api/calibration` | Raw → mV lookup table |
 
-Response and error formats are in [`spec.md`](../spec.md) §8.2. Not implemented yet: `/api/record`, `/api/record/stop`, `/api/compress`.
+Response and error formats are in [`spec.md`](../spec.md) §8.2. Not implemented yet: `/api/compress`.
 
 The SoftAP password is generated on first boot, stored in NVS, and printed to the serial log (the OLED will show it once the UI exists).
 
@@ -175,6 +187,7 @@ Recording constants live in [`lib/irsensor_core/recording.h`](lib/irsensor_core/
 | `recording::DEFAULT_SAMPLE_RATE_HZ` | 10 000 | ADC sample rate |
 | `recording::MAX_DURATION_S` | 300 | Cap at 1–10 kHz (≈ 6 MB at 10 kHz) |
 | `recording::MAX_DURATION_20KHZ_S` | 120 | Cap at 20 kHz (PSRAM budget) |
+| `ADC_POOL_BYTES` (`config.h`) | 16 KB | DMA result pool — ~200 ms at 20 kHz; raise if recordings report overrun |
 | `settings::Settings::default_duration_s` | 30 | Default recording length |
 
 Other device constants are in [`include/config.h`](include/config.h), e.g. `BATTERY_READ_INTERVAL_MS` (30 000).

@@ -53,6 +53,16 @@ static void test_path_for_id() {
     TEST_ASSERT_FALSE(recording::path_for_id(1, buf, 10));  // too small
 }
 
+static void test_temp_path_for_id() {
+    char buf[64];
+    TEST_ASSERT_TRUE(recording::temp_path_for_id(42, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_STRING("/data/recordings/00042.tmp", buf);
+
+    // Temp files must never parse as finished recordings
+    uint32_t id;
+    TEST_ASSERT_FALSE(recording::parse_filename("00042.tmp", &id));
+}
+
 static void test_parse_filename() {
     uint32_t id = 0;
     TEST_ASSERT_TRUE(recording::parse_filename("00042.irec", &id));
@@ -83,6 +93,7 @@ int main() {
     RUN_TEST(test_validate_free_space_includes_margin);
     RUN_TEST(test_actual_rate_defaults_to_nominal);
     RUN_TEST(test_path_for_id);
+    RUN_TEST(test_temp_path_for_id);
     RUN_TEST(test_parse_filename);
     RUN_TEST(test_parse_id);
     return UNITY_END();

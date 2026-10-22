@@ -104,7 +104,9 @@ The ESP32-C5's GDMA controller offloads ADC sampling entirely to hardware:
 - Following DAQ practice (record the coerced/actual rate, not the requested one), the **actual
   rate for each nominal setting is measured on hardware** and stored in firmware as a constant
   table; recordings store the actual rate in **millihertz** (§4.2).
-- Until measured on hardware, the actual rate is assumed equal to the nominal rate.
+- Until measured on hardware, the actual rate is assumed equal to the nominal rate. The firmware
+  logs a rough measured rate (samples ÷ elapsed time) after every recording to help fill the
+  table.
 
 ---
 
@@ -132,6 +134,8 @@ Header (32 bytes):
   0x0D    8B    Start timestamp — UTC microseconds since epoch (uint64_le)
   0x15    4B    CRC-32 of the uncompressed sample data (uint32_le) — see §4.5
   0x19    1B    Flags: bit 0 = compressed (zlib)
+                       bit 1 = overrun — samples were lost during capture (DMA pool
+                               overflow); the timeline is unreliable
   0x1A    6B    Reserved (zero-filled)
 
 Data payload:
@@ -409,7 +413,7 @@ needed — the simplicity of stateless REST is preferred on a single-core MCU wi
 | Method | Path | Description |
 | :--- | :--- | :--- |
 | `GET` | `/api/status` | Device status: battery (voltage + SoC%), free space, recording count, WiFi info, current state (`idle` / `recording` / `saving` / `compressing`), and if recording: `{elapsed_s, total_s, recording_id}`; if compressing: `{done, total}` |
-| `POST` | `/api/record` | Start recording. Body: `{"duration_s": 30, "sample_rate_hz": 10000}` (nominal rate). Returns error if insufficient space or the duration exceeds the cap for that rate (§4.4). |
+| `POST` | `/api/record` | Start recording. Body: `{"duration_s": 30, "sample_rate_hz": 10000}` (nominal rate; both required). Returns error if insufficient space or the duration exceeds the cap for that rate (§4.4). |
 | `POST` | `/api/record/stop` | Stop the current recording early. The partial recording is finalized and saved. |
 | `GET` | `/api/recordings` | List all recordings with metadata (id, timestamp, duration, sample rate, size, compressed flag) |
 | `GET` | `/api/recordings/{id}` | Download a specific recording (binary, IREC format) |
@@ -442,7 +446,7 @@ All JSON bodies are objects. Shapes for the endpoints whose output isn't obvious
 | :--- | :--- |
 | `POST /api/record` | `200` `{"id": 42, "duration_s": 30, "sample_rate_hz": 10000}` |
 | `POST /api/record/stop` | `200` `{"id": 42}` |
-| `GET /api/recordings` | `200` `{"recordings": [<entry>, …]}` in ascending ID order; each entry is `{"id", "start_utc_us", "duration_ms", "sample_rate_mhz", "sample_count", "size_bytes", "compressed"}` |
+| `GET /api/recordings` | `200` `{"recordings": [<entry>, …]}` in ascending ID order; each entry is `{"id", "start_utc_us", "duration_ms", "sample_rate_mhz", "sample_count", "size_bytes", "compressed", "overrun"}` |
 | `GET /api/recordings/{id}` | `200` `application/octet-stream` (chunked), `Content-Disposition: attachment; filename="00042.irec"` |
 | `DELETE /api/recordings/{id}` | `200` `{"deleted": 1}` |
 | `DELETE /api/recordings` | `200` `{"deleted": <count>}` |
@@ -528,8 +532,8 @@ While connected:
 
 | Task | Priority | Responsibility |
 | :--- | :--- | :--- |
-| **ADC DMA Drain** | Highest | Pull samples from DMA buffers → PSRAM recording buffer. Runs only during active recording. |
-| **Recording Save** | High | After capture stops: write the PSRAM recording buffer to LittleFS, compute CRC, write header. |
+| **Recorder** (capture) | Highest (18) | Pull samples from DMA buffers → PSRAM recording buffer. Runs only during active recording. |
+| **Recorder** (save) | Below HTTP (4) | After capture stops: compute CRC, write header + samples to LittleFS. Same task, priority lowered so `GET /api/status` stays responsive while saving. |
 | **Background Jobs** | Low | Compression and delete-all, in yielding chunks. |
 | **WiFi / HTTP** | Medium | Handle REST API requests. Yield-friendly. |
 | **UI Task** | Low | OLED rendering, rotary encoder polling, LED updates. Suspended during recording (except LED). |
@@ -644,6 +648,8 @@ While connected:
 - **Handles both compressed and uncompressed recordings** transparently (checks IREC flags byte,
   decompresses zlib if needed) and verifies the CRC-32 over the uncompressed samples
 - **Retries on `409 Busy`** — the device rejects most requests while recording/saving/compressing
+- **Warns on overrun recordings** (IREC flags bit 1 / `"overrun": true`) — samples were lost, so
+  timing within that recording can't be trusted
 
 ### 10.4. Local Storage
 

@@ -32,5 +32,8 @@ esp_err_t recordings_delete(uint32_t id);
 // Returns the number of recordings deleted.
 uint32_t recordings_delete_all();
 
+// Records that the recorder saved a new file.
+void recordings_added();
+
 // Next unused recording ID, persisted in NVS. 0 when IDs are exhausted.
 uint32_t recordings_allocate_id();

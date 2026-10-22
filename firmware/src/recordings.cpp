@@ -141,6 +141,8 @@ uint32_t recordings_delete_all() {
     return deleted;
 }
 
+void recordings_added() { count++; }
+
 uint32_t recordings_allocate_id() {
     if (next_id > recording::MAX_ID) return 0;
     uint32_t id = next_id++;

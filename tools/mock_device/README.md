@@ -10,6 +10,7 @@ It follows the firmware's core library (`firmware/lib/irsensor_core`):
 - 409 gating from `api::route_allowed`.
 - Validation and error strings from `recording::validate`.
 - The IREC header layout from `irec.cpp`.
+- Request parsing and error precedence from the handlers in `firmware/src/api.cpp`.
 
 If either side changes, update the other.
 
@@ -29,6 +30,7 @@ Then poll `http://127.0.0.1:8080/api/status`.
 | `--data-dir DIR` | Persist recordings (`DIR/00042.irec`, the same names as on the device), the ID counter and the settings (`DIR/device.json`) across restarts. Without it, all state is in memory. |
 | `--time-scale X` | Run device time X× faster: recording progress, saving and compression. Handy for quick demos. |
 | `--capacity BYTES` | Storage size used for `free_bytes` and the space check. Default 25 MiB. Make it small to test `insufficient_space`. |
+| `--overrun-every N` | Mark every Nth recording ID as overrun: flags bit 1 is set, `"overrun": true` appears in the list, and 1–3 gaps of about 50 ms of samples are dropped. Use it to exercise the app's overrun warning. |
 | `--unsynced-clock` | Start the device clock at the Unix epoch, as after a full power loss, until `POST /api/time` is called. By default the mock uses the host clock. |
 | `--no-calibration` | Answer `GET /api/calibration` with `503 calibration_unavailable`, like a chip without eFuse calibration data. |
 | `--no-cors` | Leave out the `Access-Control-Allow-Origin: *` header. |
@@ -58,7 +60,9 @@ The tests run with a 10× time scale and take about 10 s. They cover:
 - every 409 case during recording and saving
 - validation, including the 300 s and 120 s caps and free space
 - delete-all confirmation, single delete and 404s
-- the response shapes and error codes in §8.2 "Response Formats"
+- the response shapes and error codes in §8.2 "Response Formats", and the body
+  parsing rules of `api.cpp`
+- overrun recordings
 - IDs never reused
 - time sync, settings, calibration and persistence
 
@@ -80,6 +84,8 @@ The tests run with a 10× time scale and take about 10 s. They cover:
 - `zlib.crc32` of the uncompressed `uint16_le` samples.
 - Compressing a file sets flag bit 0 and zlib-compresses the payload. The CRC
   doesn't change.
+- Flag bit 1 (overrun) is 0 unless `--overrun-every` selects the recording.
+  Compression keeps it.
 
 The samples are synthetic 12-bit data:
 
@@ -104,61 +110,64 @@ most 8 mV). It is monotonic, with 4096 entries at `attenuation_db: 6`.
 - `wifi.ssid` is `IRSensor-MOCK`.
 - `client_connected` is always `true`.
 
+## Request parsing (as in `firmware/src/api.cpp`)
+
+- **409 first.** The 409 rule is checked before the body or ID is read, so a bad
+  request during a recording gets 409, not 400 or 404.
+- **JSON bodies.** A body must be a JSON object of 1–512 bytes. An empty or larger
+  body gets `invalid_body`. Anything that isn't a JSON object, including malformed
+  JSON, an array, or `NaN`, gets `invalid_json`.
+- **Numbers.** These must be whole and non-negative. A float such as `30.0` is
+  accepted, as cJSON does.
+- **`POST /api/record`.** Both fields are required. If `sample_rate_hz` is missing
+  or isn't a valid number, the result is `invalid_rate`, and that is checked
+  first. Then the same applies to `duration_s` with `invalid_duration`. After that,
+  `recording::validate` runs: an unsupported rate gives `invalid_rate`, a duration
+  over the cap or equal to 0 gives `invalid_duration`, and lack of space gives
+  `507 insufficient_space`.
+- **`POST /api/time`.** A missing, non-integer or implausible `utc_us` (outside
+  2024–2100) gets `invalid_time`.
+- **`DELETE /api/recordings`.** The body must be an object with exactly one key,
+  `"confirm": "DELETE_ALL"`. Any other object gets `confirmation_required`.
+- **`POST /api/settings`.** The first bad key, in body order, is reported as
+  `invalid_setting` or `unknown_setting`, with `"field"`.
+- **Malformed recording IDs.** A segment that isn't 1–5 digits gets `404 not_found`.
+
 ## Ambiguities in the spec, and what the mock does
 
-Response bodies, error codes and status codes follow the "Response Formats" part of
-`spec.md` §8.2. That part was added while this mock was being written, and the
-mock tracks the working-tree version of the spec. The points below are still open
-in the spec and the firmware sources. The firmware should settle each one, and the
-spec should record the decision.
+These are still open in `spec.md` and the firmware. The firmware should settle
+each one, and the spec should record the decision.
 
-1. **`POST /api/record` fields.** Both `duration_s` and `sample_rate_hz` are required.
-   If either is missing or isn't an integer, the mock returns `invalid_body`. It
-   doesn't fall back to the `default_*` settings, though the device's "Quick Start"
-   does. A zero or negative duration returns `invalid_duration`.
+1. **Unknown paths and wrong methods.** The spec's error table doesn't cover them.
+   The mock answers `404 not_found` and `405 {"error":"method_not_allowed"}`.
+   `esp_http_server`'s built-in 404 and 405 responses are plain text unless the
+   firmware overrides them.
 2. **`POST /api/record/stop` while idle.** §8.2 only defines the 409 rules for
    non-idle states. `api::route_allowed` allows stop only while recording, so when
    idle the mock answers `409 {"error":"busy","state":"idle"}`. The same applies
    while saving or compressing.
-3. **Order of checks.** The mock checks the 409 rule before parsing the body or ID.
-   So a bad ID or body during a recording gets 409, not 400 or 404.
-4. **Malformed recording IDs.** The error table has no code for a path segment that
-   isn't 1–5 digits (`recording::parse_id` fails). The mock answers
-   `404 {"error":"not_found"}`.
-5. **Unknown paths and wrong methods.** These aren't in the error table. The mock
-   answers `404 not_found` and `405 {"error":"method_not_allowed"}`.
-   `esp_http_server`'s built-in 404 and 405 responses are plain text unless the
-   firmware overrides them.
-6. **What "exactly" means for the delete-all body.** The mock compares the parsed
-   JSON: it must equal `{"confirm":"DELETE_ALL"}` with no extra keys. Whitespace
-   doesn't matter. It doesn't compare bytes. Anything else, including an empty or
-   non-JSON body, gets `400 confirmation_required`.
-7. **`POST /api/compress` with nothing to compress.** The mock returns
+3. **`POST /api/compress` with nothing to compress.** The mock returns
    `{"queued": 0}` and stays `idle`.
-8. **`POST /api/time` errors.** A missing or non-integer `utc_us` gets
-   `invalid_body`. A value outside 2024–2100 (`api::is_plausible_utc_us`) gets
-   `invalid_time`.
-9. **When the recording ID is allocated.** The status shows `recording.id` during
+4. **When the recording ID is allocated.** The status shows `recording.id` during
    capture, so the ID is taken from the counter at start. A recording that never
    gets saved would leave a gap, which §4.6 allows.
-10. **Very short or immediately stopped recordings.** The mock saves them even if
-    they have 0 samples. The firmware might discard them instead.
-11. **WiFi SSID and password.** App feature §10.3.6 lists them as remote settings,
-    but they aren't in `settings.cpp` or the settings shape in §8.2. The mock
-    rejects them as `unknown_setting`.
-12. **CORS.** The spec doesn't mention it. A fetch from the Tauri webview to
-    `192.168.4.1` is cross-origin unless the app goes through the Tauri HTTP
-    plugin (Rust side). The mock sends `Access-Control-Allow-Origin: *` and answers
-    `OPTIONS` preflights, so browser-based development works. The real firmware
-    sends neither.
-13. **Time before sync.** The real clock is wrong until the first
-    `POST /api/time`. The mock uses the host clock unless you pass
-    `--unsynced-clock`.
-14. **Recording ID limit.** Filenames have 5 digits, so the highest ID is 99999
-    (`recording::MAX_ID`). The spec doesn't say what happens after that, and the
-    mock doesn't enforce it.
-15. **What `free_bytes` counts.** The mock subtracts only the file sizes from the
+5. **Very short or immediately stopped recordings.** The mock saves them even if
+   they have 0 samples. The firmware might discard them instead.
+6. **WiFi SSID and password.** App feature §10.3.6 lists them as remote settings,
+   but they aren't in `settings.cpp` or the settings shape in §8.2. The mock
+   rejects them as `unknown_setting`.
+7. **CORS.** The spec doesn't mention it. A fetch from the Tauri webview to
+   `192.168.4.1` is cross-origin unless the app goes through the Tauri HTTP
+   plugin (Rust side). The mock sends `Access-Control-Allow-Origin: *` and answers
+   `OPTIONS` preflights. The real firmware sends neither.
+8. **Time before sync.** The real clock is wrong until the first
+   `POST /api/time`. The mock uses the host clock unless you pass
+   `--unsynced-clock`.
+9. **Recording ID limit.** Filenames have 5 digits, so the highest ID is 99999
+   (`recording::MAX_ID`). The spec doesn't say what happens after that, and the
+   mock doesn't enforce it.
+10. **What `free_bytes` counts.** The mock subtracts only the file sizes from the
     capacity. It doesn't model LittleFS overhead, and it doesn't reserve space for
     a recording in progress.
-16. **Codes the mock never returns.** It never produces `500 storage_error`.
+11. **Codes the mock never returns.** It never produces `500 storage_error`.
     `503 calibration_unavailable` only appears with `--no-calibration`.

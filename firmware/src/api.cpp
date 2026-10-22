@@ -15,6 +15,7 @@
 #include "config.h"
 #include "device_state.h"
 #include "json_writer.h"
+#include "recorder.h"
 #include "recording.h"
 #include "recordings.h"
 #include "settings_store.h"
@@ -128,12 +129,63 @@ static esp_err_t handle_status(httpd_req_t* req) {
     s.recording_count  = recordings_count();
     s.ssid             = wifi_ap_ssid();
     s.client_connected = wifi_ap_client_connected();
-    // ponytail: recording progress and compress progress are filled in by
-    // the recorder (step 4) and compression job (step 6)
+    if (s.state == api::DeviceState::Recording) {
+        RecorderProgress p = recorder_progress();
+        s.recording_id = p.id;
+        s.elapsed_s    = p.elapsed_s;
+        s.total_s      = p.total_s;
+    }
+    // ponytail: compress progress is filled in by the compression job (step 6)
 
     char buf[320];
     JsonWriter w(buf, sizeof(buf));
     api::write_status(w, s);
+    return send_json(req, "200 OK", w);
+}
+
+// ── POST /api/record, /api/record/stop ──────────────────────────────────────
+
+static esp_err_t handle_record_start(httpd_req_t* req) {
+    if (!api::route_allowed(device_state(), Route::RecordStart)) return send_busy(req);
+
+    cJSON* body;
+    esp_err_t err = read_json_body(req, &body);
+    if (!body) return err;
+
+    uint64_t rate = 0, duration = 0;
+    bool rate_ok     = get_uint(cJSON_GetObjectItemCaseSensitive(body, "sample_rate_hz"), UINT32_MAX, &rate);
+    bool duration_ok = get_uint(cJSON_GetObjectItemCaseSensitive(body, "duration_s"), UINT32_MAX, &duration);
+    cJSON_Delete(body);
+    if (!rate_ok)     return send_error(req, "400 Bad Request", "invalid_rate");
+    if (!duration_ok) return send_error(req, "400 Bad Request", "invalid_duration");
+
+    uint32_t id = 0;
+    switch (recorder_start(rate, duration, &id)) {
+        case StartResult::Ok:                break;
+        case StartResult::Busy:              return send_busy(req);
+        case StartResult::InvalidRate:       return send_error(req, "400 Bad Request", "invalid_rate");
+        case StartResult::InvalidDuration:   return send_error(req, "400 Bad Request", "invalid_duration");
+        case StartResult::InsufficientSpace: return send_error(req, "507 Insufficient Storage", "insufficient_space");
+        case StartResult::StorageError:      return send_error(req, "500 Internal Server Error", "storage_error");
+    }
+
+    char buf[96];
+    JsonWriter w(buf, sizeof(buf));
+    w.begin_object()
+        .key("id").num(id)
+        .key("duration_s").num(static_cast<int64_t>(duration))
+        .key("sample_rate_hz").num(static_cast<int64_t>(rate))
+     .end_object();
+    return send_json(req, "200 OK", w);
+}
+
+static esp_err_t handle_record_stop(httpd_req_t* req) {
+    uint32_t id = 0;
+    if (!recorder_stop(&id)) return send_busy(req);
+
+    char buf[32];
+    JsonWriter w(buf, sizeof(buf));
+    w.begin_object().key("id").num(id).end_object();
     return send_json(req, "200 OK", w);
 }
 
@@ -379,10 +431,11 @@ void api_start() {
         return;
     }
 
-    // ponytail: POST /api/record, /api/record/stop (step 4) and
-    // POST /api/compress (step 6) are registered when they're implemented
+    // ponytail: POST /api/compress is registered with the compression job (step 6)
     const httpd_uri_t routes[] = {
         {.uri = "/api/status",       .method = HTTP_GET,    .handler = handle_status,                .user_ctx = nullptr},
+        {.uri = "/api/record",       .method = HTTP_POST,   .handler = handle_record_start,          .user_ctx = nullptr},
+        {.uri = "/api/record/stop",  .method = HTTP_POST,   .handler = handle_record_stop,           .user_ctx = nullptr},
         {.uri = "/api/recordings",   .method = HTTP_GET,    .handler = handle_recordings_list,       .user_ctx = nullptr},
         {.uri = "/api/recordings",   .method = HTTP_DELETE, .handler = handle_recordings_delete_all, .user_ctx = nullptr},
         {.uri = "/api/recordings/*", .method = HTTP_GET,    .handler = handle_recording_get,         .user_ctx = nullptr},

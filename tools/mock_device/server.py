@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Mock of the IR sensor device's REST API (spec.md §8.2).
 
-Standard library only. Mirrors firmware/lib/irsensor_core: the JSON shapes of
-api_model.cpp and settings.cpp, api::route_allowed, recording::validate and
-the IREC format of irec.cpp.
+Standard library only. Mirrors firmware/lib/irsensor_core (the JSON shapes of
+api_model.cpp and settings.cpp, api::route_allowed, recording::validate, the
+IREC format of irec.cpp) and the request parsing of firmware/src/api.cpp.
 
     python3 tools/mock_device/server.py --port 8080
 """
@@ -28,6 +28,7 @@ HEADER_SIZE = 32
 MAGIC = b"IREC"
 VERSION = 0x01
 FLAG_COMPRESSED = 0x01
+FLAG_OVERRUN = 0x02  # samples were lost during capture — timing unreliable
 # magic, version, rate (mHz), sample count, start (UTC µs), CRC-32, flags, reserved
 HEADER_STRUCT = struct.Struct("<4sBIIQIB6x")
 assert HEADER_STRUCT.size == HEADER_SIZE
@@ -131,16 +132,36 @@ DEFAULT_SETTINGS = {
     "default_duration_s": 30,
 }
 
-SETTING_VALIDATORS = {
-    "brightness": lambda v: isinstance(v, str) and v in BRIGHTNESS,
-    "screen_timeout_s": lambda v: is_int(v) and v in SCREEN_TIMEOUTS_S,
-    "default_sample_rate_hz": lambda v: is_int(v) and is_valid_rate(v),
-    "default_duration_s": lambda v: is_int(v) and v in DEFAULT_DURATIONS_S,
+# key -> parser returning the normalised value, or None if invalid
+SETTING_PARSERS = {
+    "brightness": lambda v: v if isinstance(v, str) and v in BRIGHTNESS else None,
+    "screen_timeout_s": lambda v: _uint_in(v, SCREEN_TIMEOUTS_S),
+    "default_sample_rate_hz": lambda v: _uint_in(v, SAMPLE_RATES_HZ),
+    "default_duration_s": lambda v: _uint_in(v, DEFAULT_DURATIONS_S),
 }
 
 
-def is_int(v):
-    return isinstance(v, int) and not isinstance(v, bool)
+def _uint_in(v, allowed):
+    n = get_uint(v)
+    return n if n in allowed else None
+
+
+UINT32_MAX = 0xFFFFFFFF
+INT64_MAX = 0x7FFFFFFFFFFFFFFF
+
+
+def get_uint(v, max_value=UINT32_MAX):
+    """api.cpp get_uint: a JSON number that's a whole value in [0, max] (30.0 counts).
+
+    Returns the int, or None.
+    """
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    if isinstance(v, float) and (not math.isfinite(v) or v != math.floor(v)):
+        return None
+    if v < 0 or v > max_value:
+        return None
+    return int(v)
 
 
 # --- API model (api_model.h / api_model.cpp) -------------------------------
@@ -181,6 +202,7 @@ def recording_entry(rec_id, data):
         "sample_count": h["sample_count"],
         "size_bytes": len(data),
         "compressed": bool(h["flags"] & FLAG_COMPRESSED),
+        "overrun": bool(h["flags"] & FLAG_OVERRUN),
     }
 
 
@@ -240,10 +262,22 @@ def synth_samples(rec_id, rate_mhz, count):
     return out.tobytes()
 
 
-def build_irec(rec_id, rate_mhz, count, start_utc_us):
+def build_irec(rec_id, rate_mhz, count, start_utc_us, overrun=False):
     payload = synth_samples(rec_id, rate_mhz, count)
+    flags = 0
+    if overrun:
+        # Drop 1–3 DMA-buffer-sized gaps (~50 ms each), as a drain-task overrun would
+        rnd = random.Random(-rec_id)
+        gap = max(1, int(0.05 * rate_mhz / 1000)) * BYTES_PER_SAMPLE
+        for _ in range(rnd.randint(1, 3)):
+            if len(payload) <= gap:
+                break
+            at = rnd.randrange(0, len(payload) - gap, BYTES_PER_SAMPLE)
+            payload = payload[:at] + payload[at + gap:]
+        count = len(payload) // BYTES_PER_SAMPLE
+        flags |= FLAG_OVERRUN
     crc = zlib.crc32(payload) & 0xFFFFFFFF
-    return encode_header(rate_mhz, count, start_utc_us, crc, 0) + payload
+    return encode_header(rate_mhz, count, start_utc_us, crc, flags) + payload
 
 
 def compress_irec(data):
@@ -275,12 +309,13 @@ class Device:
     """
 
     def __init__(self, data_dir=None, capacity_bytes=25 * 1024 * 1024, time_scale=1.0,
-                 unsynced_clock=False, ssid="IRSensor-MOCK"):
+                 unsynced_clock=False, ssid="IRSensor-MOCK", overrun_every=0):
         self.lock = threading.Lock()
         self.data_dir = data_dir
         self.capacity_bytes = capacity_bytes
         self.time_scale = time_scale
         self.ssid = ssid
+        self.overrun_every = overrun_every
         self.boot_mono = time.monotonic()
         # Device clock = host clock + offset. An unsynced device starts at the epoch,
         # as after full power loss (§7.3).
@@ -298,6 +333,10 @@ class Device:
         if data_dir:
             os.makedirs(data_dir, exist_ok=True)
             self._load()
+
+    def _is_overrun(self, rec_id):
+        """--overrun-every N marks every Nth recording ID as overrun."""
+        return bool(self.overrun_every) and rec_id % self.overrun_every == 0
 
     # -- clocks
 
@@ -394,7 +433,8 @@ class Device:
 
     def _save(self, rec):
         t0 = time.monotonic()
-        data = build_irec(rec["id"], rec["rate_mhz"], rec["count"], rec["start_utc_us"])
+        data = build_irec(rec["id"], rec["rate_mhz"], rec["count"], rec["start_utc_us"],
+                          self._is_overrun(rec["id"]))
         # ~1 s plus ~1 s per 6 MB written, like a LittleFS write of the PSRAM buffer
         wait = (1.0 + len(data) / 6e6) / self.time_scale - (time.monotonic() - t0)
         if wait > 0:
@@ -468,14 +508,17 @@ class Device:
             return dict(self.settings)
 
     def update_settings(self, changes):
-        """Returns (settings, None) or (None, (error, key)). All-or-nothing."""
+        """Returns (settings, None) or (None, (error, key)). All-or-nothing; the first
+        bad key in body order is reported, as in api.cpp."""
+        parsed = {}
         for key, value in changes.items():
-            if key not in SETTING_VALIDATORS:
+            if key not in SETTING_PARSERS:
                 return None, ("unknown_setting", key)
-            if not SETTING_VALIDATORS[key](value):
+            parsed[key] = SETTING_PARSERS[key](value)
+            if parsed[key] is None:
                 return None, ("invalid_setting", key)
         with self.lock:
-            self.settings.update(changes)
+            self.settings.update(parsed)
             self._save_meta()
             return dict(self.settings), None
 
@@ -531,7 +574,8 @@ class Device:
                 duration_s = (5, 10, 30)[k % 3]
                 rate_mhz = ACTUAL_RATES_MHZ[10000]
                 start = self.now_utc_us() - (n - k) * 3600 * 1000000
-                data = build_irec(rec_id, rate_mhz, duration_s * 10000, start)
+                data = build_irec(rec_id, rate_mhz, duration_s * 10000, start,
+                                  self._is_overrun(rec_id))
                 self.recordings[rec_id] = data
                 self._write_file(rec_id, data)
             self._save_meta()
@@ -540,6 +584,12 @@ class Device:
 # --- HTTP layer ------------------------------------------------------------
 
 DOWNLOAD_CHUNK = 4096
+MAX_BODY_BYTES = 512
+
+
+def _reject_constant(name):
+    raise ValueError(name)  # NaN / Infinity aren't JSON (cJSON rejects them)
+
 RECORDING_PATH = re.compile(r"/api/recordings/([^/]+)")
 
 # (method, path) -> (route name, handler method name)
@@ -597,10 +647,16 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def json_body(self):
+        """api.cpp read_json_body: a JSON object of 1–512 bytes."""
+        if not 0 < len(self.body) <= MAX_BODY_BYTES:
+            raise ApiError("invalid_body")
         try:
-            return json.loads(self.body.decode("utf-8"))
+            body = json.loads(self.body.decode("utf-8"), parse_constant=_reject_constant)
         except (UnicodeDecodeError, ValueError):
+            body = None
+        if not isinstance(body, dict):
             raise ApiError("invalid_json")
+        return body
 
     def dispatch(self):
         length = int(self.headers.get("Content-Length") or 0)
@@ -652,12 +708,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def h_record_start(self):
         body = self.json_body()
-        if not isinstance(body, dict):
-            raise ApiError("invalid_body")
-        duration_s = body.get("duration_s")
-        rate_hz = body.get("sample_rate_hz")
-        if not is_int(duration_s) or not is_int(rate_hz):
-            raise ApiError("invalid_body")
+        rate_hz = get_uint(body.get("sample_rate_hz"))
+        duration_s = get_uint(body.get("duration_s"))
+        if rate_hz is None:
+            raise ApiError("invalid_rate")
+        if duration_s is None:
+            raise ApiError("invalid_duration")
         rec_id, err = self.device.start_recording(rate_hz, duration_s)
         if err:
             raise ApiError(err, 507 if err == "insufficient_space" else 400)
@@ -696,20 +752,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {"deleted": 1})
 
     def h_recordings_delete_all(self):
-        try:
-            body = self.json_body()
-        except ApiError:
-            body = None
+        body = self.json_body()
         if body != {"confirm": "DELETE_ALL"}:
             raise ApiError("confirmation_required")
         self.send_json(200, {"deleted": self.device.delete_all()})
 
     def h_time(self):
-        body = self.json_body()
-        utc_us = body.get("utc_us") if isinstance(body, dict) else None
-        if not is_int(utc_us):
-            raise ApiError("invalid_body")
-        if not is_plausible_utc_us(utc_us):
+        utc_us = get_uint(self.json_body().get("utc_us"), INT64_MAX)
+        if utc_us is None or not is_plausible_utc_us(utc_us):
             raise ApiError("invalid_time")
         self.device.set_time(utc_us)
         self.send_json(200, {"utc_us": self.device.now_utc_us()})
@@ -721,10 +771,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, self.device.get_settings())
 
     def h_settings_set(self):
-        body = self.json_body()
-        if not isinstance(body, dict):
-            raise ApiError("invalid_body")
-        settings, err = self.device.update_settings(body)
+        settings, err = self.device.update_settings(self.json_body())
         if err:
             raise ApiError(err[0], field=err[1])
         self.send_json(200, settings)
@@ -761,6 +808,8 @@ def main(argv=None):
                    help="storage capacity for free_bytes (default 25 MiB)")
     p.add_argument("--time-scale", type=float, default=1.0, metavar="X",
                    help="run device time X times faster than real time")
+    p.add_argument("--overrun-every", type=int, default=0, metavar="N",
+                   help="mark every Nth recording ID as overrun (flags bit 1, samples dropped)")
     p.add_argument("--unsynced-clock", action="store_true",
                    help="start the device clock at the epoch until POST /api/time")
     p.add_argument("--no-calibration", action="store_true",
@@ -770,7 +819,8 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     device = Device(data_dir=args.data_dir, capacity_bytes=args.capacity,
-                    time_scale=args.time_scale, unsynced_clock=args.unsynced_clock)
+                    time_scale=args.time_scale, unsynced_clock=args.unsynced_clock,
+                    overrun_every=args.overrun_every)
     if args.seed:
         device.seed(args.seed)
     httpd = make_server(args.host, args.port, device, cors=not args.no_cors, quiet=args.quiet,

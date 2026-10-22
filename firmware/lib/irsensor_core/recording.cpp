@@ -49,11 +49,14 @@ const char* error_str(Error e) {
     return "unknown";
 }
 
-bool path_for_id(uint32_t id, char* buf, size_t len) {
+static bool format_path(uint32_t id, const char* ext, char* buf, size_t len) {
     if (id > MAX_ID) return false;
-    int n = snprintf(buf, len, "%s/%05u.irec", DIR, static_cast<unsigned>(id));
+    int n = snprintf(buf, len, "%s/%05u.%s", DIR, static_cast<unsigned>(id), ext);
     return n > 0 && static_cast<size_t>(n) < len;
 }
+
+bool path_for_id(uint32_t id, char* buf, size_t len)      { return format_path(id, "irec", buf, len); }
+bool temp_path_for_id(uint32_t id, char* buf, size_t len) { return format_path(id, "tmp", buf, len); }
 
 // 1–5 decimal digits, value ≤ MAX_ID
 static bool parse_digits(const char* s, size_t n, uint32_t* id) {

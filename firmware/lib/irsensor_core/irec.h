@@ -11,6 +11,7 @@ namespace irec {
 constexpr size_t  HEADER_SIZE     = 32;
 constexpr uint8_t VERSION         = 0x01;
 constexpr uint8_t FLAG_COMPRESSED = 0x01;
+constexpr uint8_t FLAG_OVERRUN    = 0x02;  // samples were lost — timing unreliable
 
 struct Header {
     uint32_t sample_rate_mhz = 0;  // actual rate, millihertz (§3.5)

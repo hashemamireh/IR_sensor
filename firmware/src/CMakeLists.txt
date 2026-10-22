@@ -6,6 +6,7 @@ idf_component_register(
          "device_state.cpp"
          "encoder.cpp"
          "led.cpp"
+         "recorder.cpp"
          "recordings.cpp"
          "settings_store.cpp"
          "storage.cpp"

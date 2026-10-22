@@ -62,6 +62,7 @@ void write_recording(JsonWriter& w, uint32_t id, const irec::Header& h, uint64_t
         .key("sample_count").num(h.sample_count)
         .key("size_bytes").num(static_cast<int64_t>(size_bytes))
         .key("compressed").boolean(h.flags & irec::FLAG_COMPRESSED)
+        .key("overrun").boolean(h.flags & irec::FLAG_OVERRUN)
      .end_object();
 }
 

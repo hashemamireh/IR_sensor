@@ -87,7 +87,7 @@ static void test_recording_entry() {
     TEST_ASSERT_EQUAL_STRING(
         "{\"id\":42,\"start_utc_us\":1792540800000000,\"duration_ms\":30000,"
         "\"sample_rate_mhz\":10000000,\"sample_count\":300000,"
-        "\"size_bytes\":123456,\"compressed\":true}",
+        "\"size_bytes\":123456,\"compressed\":true,\"overrun\":false}",
         buf);
 }
 

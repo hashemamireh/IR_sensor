@@ -62,6 +62,9 @@ const char* error_str(Error e);
 // "/data/recordings/00042.irec". False if id > MAX_ID or buf is too small.
 bool path_for_id(uint32_t id, char* buf, size_t len);
 
+// "/data/recordings/00042.tmp" — written during save, renamed when complete.
+bool temp_path_for_id(uint32_t id, char* buf, size_t len);
+
 // Parses a directory entry name like "00042.irec".
 bool parse_filename(const char* name, uint32_t* id);
 
