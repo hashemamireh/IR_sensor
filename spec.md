@@ -414,8 +414,8 @@ no router or internet required.
 | :--- | :--- |
 | Mode | SoftAP (ESP32 is the access point) |
 | Band | 2.4 GHz or 5 GHz (WiFi 6 capable) |
-| SSID | Configurable (default: `IRSensor-XXXX` where XXXX = last 4 of MAC) |
-| Password | Configurable (default: generated, shown on OLED on first boot) |
+| SSID | `IRSensor-XXXX` where XXXX = last 4 hex digits of the MAC (fixed) |
+| Password | Generated on first boot, stored in NVS, shown on the OLED (first boot, and WiFi → Show SSID & IP); not changeable remotely |
 | IP | `192.168.4.1` (default ESP-IDF SoftAP address) |
 | Max clients | 1 (only the tablet) |
 
@@ -651,7 +651,8 @@ While connected:
    - Screen timeout
    - Default sample rate
    - Default recording duration
-   - WiFi SSID and password
+   - (WiFi SSID and password are not remotely configurable — changing them would drop the
+     tablet's connection; see §8.1)
 
 7. **Statistics**
    - Per-recording: min, max, mean, standard deviation of ADC values
