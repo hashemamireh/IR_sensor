@@ -7,7 +7,7 @@
     "f_cpu": "240000000L",
     "f_flash": "80000000L",
     "flash_mode": "qio",
-    "psram_type": "opi",
+    "psram_type": "qio",
     "mcu": "esp32c5",
     "variant": "esp32c5"
   },
@@ -22,7 +22,7 @@
     "arduino",
     "espidf"
   ],
-  "name": "Waveshare ESP32-C5-WIFI6-KIT-N32R8 (32 MB Flash, 8 MB PSRAM OPI)",
+  "name": "Waveshare ESP32-C5-WIFI6-KIT-N32R8 (32 MB Flash, 8 MB PSRAM QSPI)",
   "upload": {
     "flash_size": "32MB",
     "maximum_ram_size": 327680,

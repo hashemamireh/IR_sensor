@@ -139,6 +139,14 @@ Data payload:
 - Each recording includes a **CRC32** checksum of the data payload, computed at write time and
   verified on read/transfer.
 
+### 4.6. Recording IDs & Filenames
+
+- Each recording gets a numeric ID from a monotonically increasing counter stored in NVS. IDs
+  are never reused, even after deletion.
+- Files are stored as `/data/recordings/<id>.irec`, with the ID zero-padded to 5 digits (e.g.
+  `/data/recordings/00042.irec`).
+- The same ID is used in the REST API (`/api/recordings/{id}`).
+
 ---
 
 ## 5. Battery Monitoring
@@ -306,10 +314,12 @@ From the **Status Screen** (shown on wake), a **short press** opens the **Main M
 ### 7.1. Deep Sleep
 
 - **Entry**: Via the device menu ("Deep Sleep" → confirm) or via app command.
-- **Wake source**: Long press (~2 seconds) on the rotary encoder button. The LP (low-power)
-  RISC-V core monitors the GPIO for the encoder press while the main HP core is fully powered
-  down.
-- **Power draw**: Deep sleep with LP core monitoring ≈ 10–30 µA (depending on peripherals left
+- **Wake source**: Long press (~2 seconds) on the rotary encoder button. The button GPIO (an LP
+  GPIO, pull-up held during sleep) is configured as a deep-sleep wake source; any press wakes the
+  chip. On boot the firmware times the press: if the button is released before ~2 s, the device
+  goes straight back to deep sleep. This avoids a separate LP-core (ULP) program at the cost of a
+  brief wake on accidental presses.
+- **Power draw**: Deep sleep with GPIO wake ≈ 10–30 µA (depending on peripherals left
   active).
 
 ### 7.2. Screen Power Saving
@@ -322,8 +332,11 @@ From the **Status Screen** (shown on wake), a **short press** opens the **Main M
 - The ESP32-C5's **RTC timer persists through deep sleep** using the internal RC oscillator.
 - Drift is expected (several seconds per hour) but acceptable — the tablet re-syncs the clock on
   every connection.
-- The time offset (received from the tablet) is stored in **RTC memory** (`RTC_DATA_ATTR`) so it
-  survives deep sleep cycles.
+- The system clock is set with `settimeofday()` and read with `gettimeofday()`. ESP-IDF keeps
+  the system clock running across deep sleep (backed by the RTC timer), so no manual offset
+  bookkeeping is needed. Note that `esp_timer_get_time()` restarts at 0 on every boot, including
+  deep-sleep wake, so it must **not** be used for wall-clock time. Time is lost on full power loss
+  until the next sync.
 - Within a single recording, sample timing is hardware-precise (DMA-driven) regardless of RTC
   drift.
 
@@ -357,6 +370,7 @@ needed — the simplicity of stateless REST is preferred on a single-core MCU wi
 | :--- | :--- | :--- |
 | `GET` | `/api/status` | Device status: battery (voltage + SoC%), free space, recording count, WiFi info, current state (`idle` / `recording`), and if recording: `{elapsed_s, total_s, recording_id}` |
 | `POST` | `/api/record` | Start recording. Body: `{"duration_s": 30, "sample_rate_hz": 10000}`. Returns error if insufficient space. |
+| `POST` | `/api/record/stop` | Stop the current recording early. The partial recording is finalized and saved. |
 | `GET` | `/api/recordings` | List all recordings with metadata (id, timestamp, duration, sample rate, size, compressed flag) |
 | `GET` | `/api/recordings/{id}` | Download a specific recording (binary, IREC format) |
 | `DELETE` | `/api/recordings/{id}` | Delete a specific recording |
@@ -381,9 +395,10 @@ While connected:
 
 1. Tablet connects to ESP32 SoftAP.
 2. App sends `POST /api/time` with current UTC timestamp in microseconds.
-3. ESP32 stores the offset between `esp_timer_get_time()` and the received UTC time.
-4. All subsequent recording timestamps are computed from this offset.
-5. Offset is stored in RTC memory to survive deep sleep.
+3. ESP32 sets its system clock from the received time with `settimeofday()`.
+4. Recording start timestamps are read with `gettimeofday()`.
+5. The system clock keeps running through deep sleep (RTC timer), so no extra persistence is
+   needed.
 6. On reconnection, the app re-syncs time to correct any RTC drift.
 
 ---
@@ -409,12 +424,12 @@ While connected:
 | ESP-IDF HTTP Server | REST API (`esp_http_server`) |
 | ESP-IDF NVS Flash | Key-value settings storage |
 | ESP-IDF LittleFS | Flash filesystem for recordings |
-| SSD1306 / U8g2 | OLED display driver (I2C) |
+| ESP-IDF `esp_lcd` (SSD1306 panel) | OLED display driver (I2C), with a small framebuffer + font |
 | MAX17043 driver | I2C fuel gauge — battery voltage and SoC% readings |
 | FastLED or ESP-IDF RMT | WS2812B RGB LED control |
-| Rotary encoder library | Encoder input handling (interrupt-driven) |
+| ESP-IDF PCNT + `espressif/button` | Encoder rotation (hardware quadrature decoding) and short/long press detection |
 | ESP-IDF ADC Calibration | Curve fitting calibration |
-| miniz / zlib | Optional recording compression |
+| miniz (in ESP32-C5 ROM) | Optional zlib recording compression — no extra library needed |
 
 ### 9.3. FreeRTOS Task Architecture
 
@@ -585,8 +600,8 @@ IR_sensor/
 | Settings persistence | ESP-IDF NVS (key-value) | Platform built-in; power-loss safe; no custom serialization code |
 | Display during recording | Frozen OLED + RGB LED | Avoids I2C contention and CPU load on single-core MCU |
 | Battery monitoring | MAX17043 I2C fuel gauge | Accurate ModelGauge™ SoC; no ADC channel conflict with OPT101; can read during recording |
-| Time sync | Tablet sends UTC on connect; RTC persists in deep sleep | No external RTC hardware needed; drift corrected on each reconnection |
-| Deep sleep wake | Long press (≥2 s) on encoder button via LP core | Ultra-low standby power; LP RISC-V core monitors GPIO |
+| Time sync | Tablet sends UTC on connect → `settimeofday()`; system clock persists in deep sleep | No external RTC hardware needed; drift corrected on each reconnection |
+| Deep sleep wake | GPIO wake on encoder button, firmware checks for ≥2 s hold after boot | Ultra-low standby power without a separate LP-core program |
 | Max recording duration | 300 seconds | Prevents accidental flash exhaustion; ~6 MB at 10 kHz |
 | OPT101 power | 3.3V from ESP32 rail | Device operates on battery (no 5V available unplugged); output range ~0–2.15 V usable |
 | ADC attenuation | 6 dB (~0–2.2 V range) | Best match for OPT101 output ceiling at 3.3V supply |

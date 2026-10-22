@@ -41,7 +41,7 @@ PlatformIO will automatically fetch ESP-IDF and the managed components (`littlef
 ```
 firmware/
 ├── platformio.ini              # Build config (board, framework, flags)
-├── partitions.csv              # Custom partition table (NVS + OTA + 25 MB storage)
+├── partitions.csv              # Custom partition table (NVS + 3 MB app + ~29 MB storage)
 ├── sdkconfig.defaults          # ESP-IDF Kconfig overrides
 ├── boards/
 │   └── waveshare_esp32c5_n32r8.json  # Custom board definition
@@ -50,6 +50,12 @@ firmware/
 │   └── pins.h                  # GPIO / I2C / ADC pin assignments
 └── src/
     ├── main.cpp                # Entry point — initializes all subsystems & tasks
+    ├── api.cpp/.h              # HTTP REST API
+    ├── battery.cpp/.h          # MAX17043 fuel gauge + monitor task
+    ├── encoder.cpp/.h          # Rotary encoder + button
+    ├── led.cpp/.h              # WS2812B status LED
+    ├── storage.cpp/.h          # LittleFS mount + usage info
+    ├── wifi_ap.cpp/.h          # WiFi SoftAP
     ├── idf_component.yml       # ESP-IDF component dependencies
     └── CMakeLists.txt          # Source list for ESP-IDF build
 ```
@@ -86,6 +92,7 @@ The device runs as a **WiFi SoftAP** (`IRSensor-XXXX`). The companion app connec
 | :--- | :--- | :--- |
 | `GET` | `/api/status` | Device state, battery, free space |
 | `POST` | `/api/record` | Start a recording |
+| `POST` | `/api/record/stop` | Stop the current recording early |
 | `GET` | `/api/recordings` | List all recordings |
 | `GET` | `/api/recordings/{id}` | Download recording (IREC binary) |
 | `DELETE` | `/api/recordings/{id}` | Delete a recording |
