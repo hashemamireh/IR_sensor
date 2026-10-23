@@ -17,7 +17,8 @@
 	import { GraphView, type GraphTrace } from '$lib/graphView';
 	import { durationS, parseIrec, sampleRateHz, type IrecFile } from '$lib/irec';
 	import { allTags, displayName, usableCalibration, type LocalRecording } from '$lib/recordings';
-	import ExportDialog from './ExportDialog.svelte';
+	import ExportPanel from './ExportPanel.svelte';
+	import Popover from './Popover.svelte';
 	import RecordingMeta from './RecordingMeta.svelte';
 	import Segmented from './Segmented.svelte';
 
@@ -53,6 +54,7 @@
 	let view: GraphView | null = null;
 	let built = '';
 	let exporting = $state<[number, number] | null | false>(false);
+	let exportPanel = $state<ExportPanel>();
 
 	const main = $derived(recordings[0]);
 	const overlay = $derived(recordings.length > 1);
@@ -186,7 +188,34 @@
 				</div>
 			{/if}
 			<button onclick={() => view?.reset()} disabled={zoom <= 1.0001}>Reset zoom</button>
-			<button disabled={!mainLoaded} onclick={() => (exporting = exportWindow())}>Export…</button>
+			<Popover
+				open={exporting !== false && !!mainLoaded}
+				onclose={() => {
+					if (!exportPanel?.busy()) exporting = false;
+				}}
+				align="right"
+				width={440}
+				label="Export"
+			>
+				{#snippet trigger()}
+					<button
+						disabled={!mainLoaded}
+						aria-expanded={exporting !== false}
+						onclick={() => (exporting = exporting === false ? exportWindow() : false)}>Export…</button
+					>
+				{/snippet}
+				{#if mainLoaded && exporting !== false}
+					<ExportPanel
+						bind:this={exportPanel}
+						recording={main}
+						file={mainLoaded.file}
+						lut={luts.get(main.file) ?? null}
+						window={exporting}
+						dataDir={dev.local.root}
+						onclose={() => (exporting = false)}
+					/>
+				{/if}
+			</Popover>
 		</div>
 	</div>
 	<div class="facts muted">
@@ -267,16 +296,6 @@
 		{/each}
 	</div>
 
-	{#if exporting !== false && mainLoaded}
-		<ExportDialog
-			recording={main}
-			file={mainLoaded.file}
-			lut={luts.get(main.file) ?? null}
-			window={exporting}
-			dataDir={dev.local.root}
-			onclose={() => (exporting = false)}
-		/>
-	{/if}
 
 	<p class="muted help">
 		Scroll or pinch to zoom · drag to pan · double-click to reset{zoom > 1.0001 ? ` · ${zoom < 100 ? zoom.toFixed(1) : Math.round(zoom)}×` : ''}

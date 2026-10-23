@@ -276,6 +276,7 @@ These can only be checked on the real tablet. Please report back:
 - [ ] With 3–8 long recordings overlaid, zoom and pan still feel smooth.
 - [ ] The legend chips (hide/show, − / + offset, ✕) are big enough to tap.
 - [ ] Export of a long recording to CSV finishes, and the file opens.
+- [ ] The Record, Export and Device popovers open and close comfortably by touch (tap outside closes them).
 
 ## Layout
 

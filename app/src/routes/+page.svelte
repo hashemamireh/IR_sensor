@@ -2,7 +2,6 @@
 	import { onMount } from 'svelte';
 	import Graph from '$lib/components/Graph.svelte';
 	import RecordingsList from '$lib/components/RecordingsList.svelte';
-	import RecordPanel from '$lib/components/RecordPanel.svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import { DeviceController } from '$lib/device.svelte';
 	import { errorText } from '$lib/format';
@@ -78,7 +77,6 @@
 
 		<main>
 			<aside>
-				<RecordPanel {dev} />
 				<RecordingsList {dev} bind:selected bind:compare maxTraces={MAX_TRACES} />
 			</aside>
 			<section class="viewer">

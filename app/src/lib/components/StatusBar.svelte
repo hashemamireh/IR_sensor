@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { DEVICE_URL, MOCK_URL, type DeviceController } from '$lib/device.svelte';
 	import { bytes } from '$lib/format';
+	import Popover from './Popover.svelte';
+	import RecordPanel from './RecordPanel.svelte';
 	import SettingsDialog from './SettingsDialog.svelte';
 
 	let { dev }: { dev: DeviceController } = $props();
@@ -8,6 +10,10 @@
 	let open = $state(false);
 	let custom = $state('');
 	let settingsOpen = $state(false);
+	let recordOpen = $state(false);
+
+	const rec = $derived(dev.online && dev.status?.state === 'recording' ? dev.status.recording : undefined);
+	const saving = $derived(dev.online && dev.status?.state === 'saving');
 
 	const host = $derived(dev.baseUrl.replace(/^https?:\/\//, ''));
 	const label = $derived(
@@ -49,31 +55,51 @@
 
 	<span class="spacer"></span>
 
+	<Popover open={recordOpen} onclose={() => (recordOpen = false)} align="right" width={470} label="Record">
+		{#snippet trigger()}
+			<button
+				class="rec"
+				class:live={rec || saving}
+				disabled={!dev.online}
+				aria-expanded={recordOpen}
+				onclick={() => (recordOpen = !recordOpen)}
+			>
+				<span class="recdot"></span>
+				{#if rec}
+					<span class="num">{rec.elapsed_s} / {rec.total_s} s</span>
+				{:else if saving}
+					Saving…
+				{:else}
+					Record
+				{/if}
+			</button>
+		{/snippet}
+		<RecordPanel {dev} />
+	</Popover>
+
 	<button disabled={!dev.online} onclick={() => (settingsOpen = true)} title="Device settings">Settings</button>
 
-	<div class="target">
-		<button onclick={() => (open = !open)} aria-expanded={open}>Device: {host}</button>
-		{#if open}
-			<div class="menu">
-				<button class:on={dev.baseUrl === DEVICE_URL} onclick={() => choose(DEVICE_URL)}>
-					IR sensor <span class="muted">{DEVICE_URL}</span>
-				</button>
-				<button class:on={dev.baseUrl === MOCK_URL} onclick={() => choose(MOCK_URL)}>
-					Mock device <span class="muted">{MOCK_URL}</span>
-				</button>
-				<form
-					onsubmit={(e) => {
-						e.preventDefault();
-						if (custom.trim()) choose(custom.includes('://') ? custom : `http://${custom}`);
-					}}
-				>
-					<input placeholder="Other, e.g. 192.168.1.20:8080" bind:value={custom} />
-					<button type="submit">Use</button>
-				</form>
-				<p class="muted path">Recordings are saved in<br /><code>{dev.local.root}/recordings</code></p>
-			</div>
-		{/if}
-	</div>
+	<Popover open={open} onclose={() => (open = false)} align="right" width={340} label="Device">
+		{#snippet trigger()}
+			<button onclick={() => (open = !open)} aria-expanded={open}>Device: {host}</button>
+		{/snippet}
+		<button class="choice" class:on={dev.baseUrl === DEVICE_URL} onclick={() => choose(DEVICE_URL)}>
+			IR sensor <span class="muted">{DEVICE_URL}</span>
+		</button>
+		<button class="choice" class:on={dev.baseUrl === MOCK_URL} onclick={() => choose(MOCK_URL)}>
+			Mock device <span class="muted">{MOCK_URL}</span>
+		</button>
+		<form
+			onsubmit={(e) => {
+				e.preventDefault();
+				if (custom.trim()) choose(custom.includes('://') ? custom : `http://${custom}`);
+			}}
+		>
+			<input placeholder="Other, e.g. 192.168.1.20:8080" bind:value={custom} />
+			<button type="submit">Use</button>
+		</form>
+		<p class="muted path">Recordings are saved in<br /><code>{dev.local.root}/recordings</code></p>
+	</Popover>
 </header>
 
 {#if settingsOpen}
@@ -125,31 +151,40 @@
 	.spacer {
 		flex: 1;
 	}
-	.target {
-		position: relative;
-	}
-	.menu {
-		position: absolute;
-		right: 0;
-		top: calc(100% + 6px);
-		z-index: 10;
-		width: 340px;
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		padding: 12px;
-		background: var(--panel);
-		border: 1px solid var(--border);
-		border-radius: 12px;
-		box-shadow: 0 12px 30px rgb(0 0 0 / 0.5);
-	}
-	.menu > button {
+	.choice {
 		text-align: left;
 		display: flex;
 		justify-content: space-between;
 	}
-	.menu > button.on {
+	.choice.on {
 		border-color: var(--accent);
+	}
+	/* Same look as the record button in the panel */
+	.rec {
+		display: inline-flex;
+		align-items: center;
+		gap: 10px;
+		font-weight: 600;
+		background: color-mix(in srgb, var(--rec) 18%, var(--panel-2));
+		border-color: color-mix(in srgb, var(--rec) 60%, transparent);
+	}
+	.recdot {
+		width: 11px;
+		height: 11px;
+		border-radius: 50%;
+		background: var(--rec);
+		flex: none;
+	}
+	.rec.live .recdot {
+		animation: pulse 1.2s ease-in-out infinite;
+	}
+	.num {
+		font-variant-numeric: tabular-nums;
+	}
+	@keyframes pulse {
+		50% {
+			opacity: 0.25;
+		}
 	}
 	form {
 		display: flex;
@@ -160,7 +195,7 @@
 		min-width: 0;
 	}
 	.path {
-		margin: 4px 0 0;
+		margin: 0;
 		font-size: 12px;
 		word-break: break-all;
 	}

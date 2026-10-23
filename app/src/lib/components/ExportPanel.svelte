@@ -1,11 +1,11 @@
-<!-- Export one recording as CSV or JSON: whole or visible window, full or lower rate -->
+<!-- Export one recording as CSV or JSON: whole or visible window, full or lower rate.
+     Shown in a Popover under the graph's Export button. -->
 <script lang="ts">
 	import { downsampleChoices, estimateBytes, exportChunks, rowCount, type ExportFormat, type ExportOptions } from '$lib/export';
 	import { chooseExportPath, writeExport } from '$lib/exportFile';
 	import { bytes, errorText, rate as fmtRate } from '$lib/format';
 	import type { IrecFile } from '$lib/irec';
 	import { baseName, displayName, type LocalRecording } from '$lib/recordings';
-	import Dialog from './Dialog.svelte';
 	import Segmented from './Segmented.svelte';
 
 	let {
@@ -24,6 +24,11 @@
 		dataDir: string;
 		onclose: () => void;
 	} = $props();
+
+	/** True while writing; the Popover asks before closing then */
+	export function busy() {
+		return progress !== null;
+	}
 
 	const rateHz = $derived(file.header.sampleRateMhz / 1000);
 	const n = $derived(file.samples.length);
@@ -92,7 +97,7 @@
 	}
 </script>
 
-<Dialog title="Export {displayName(recording)}" onclose={() => (progress === null ? onclose() : (cancel = true))}>
+<h3>Export {displayName(recording)}</h3>
 	<span class="label">Format</span>
 	<Segmented label="Format" bind:value={format} disabled={progress !== null} options={[
 		{ value: 'csv', label: 'CSV' },
@@ -127,17 +132,25 @@
 		<p class="banner {result.ok ? '' : 'danger'} small path">{result.text}</p>
 	{/if}
 
-	{#snippet actions()}
-		{#if progress !== null}
-			<button onclick={() => (cancel = true)}>Cancel export</button>
-		{:else}
-			<button onclick={onclose}>{result?.ok ? 'Done' : 'Close'}</button>
-			<button class="primary" disabled={rows === 0} onclick={run}>Export…</button>
-		{/if}
-	{/snippet}
-</Dialog>
+<div class="actions">
+	{#if progress !== null}
+		<button onclick={() => (cancel = true)}>Cancel export</button>
+	{:else}
+		<button onclick={onclose}>{result?.ok ? 'Done' : 'Close'}</button>
+		<button class="primary" disabled={rows === 0} onclick={run}>Export…</button>
+	{/if}
+</div>
 
 <style>
+	h3 {
+		margin: 0;
+		font-size: 16px;
+	}
+	.actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 10px;
+	}
 	.label {
 		font-size: 13px;
 		color: var(--muted);

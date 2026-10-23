@@ -51,8 +51,6 @@
 </script>
 
 <section>
-	<h2>Record</h2>
-
 	{#if devState === 'recording' && rec}
 		<div class="live">
 			<div class="row">
@@ -113,10 +111,6 @@
 		flex-direction: column;
 		gap: 8px;
 	}
-	h2 {
-		margin: 0 0 4px;
-		font-size: 16px;
-	}
 	.label {
 		font-size: 13px;
 		color: var(--muted);
@@ -153,10 +147,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 12px;
-		padding: 14px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		background: var(--panel-2);
 	}
 	.live .recdot {
 		animation: pulse 1.2s ease-in-out infinite;
