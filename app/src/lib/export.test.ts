@@ -98,6 +98,9 @@ describe('downsampleChoices', () => {
 		expect(downsampleChoices(20_000).map((c) => [c.label, c.factor])).toEqual([
 			['10 kHz', 2], ['5 kHz', 4], ['2 kHz', 10], ['1 kHz', 20], ['500 Hz', 40], ['200 Hz', 100], ['100 Hz', 200],
 		]);
+		expect(downsampleChoices(2000).map((c) => [c.label, c.factor])).toEqual([
+			['1 kHz', 2], ['500 Hz', 4], ['200 Hz', 10], ['100 Hz', 20],
+		]);
 		expect(downsampleChoices(1000).map((c) => c.label)).toEqual(['500 Hz', '200 Hz', '100 Hz']);
 		// A measured rate keeps whole factors
 		expect(downsampleChoices(10_004.3)[0]).toEqual({ factor: 2, label: '5 kHz' });

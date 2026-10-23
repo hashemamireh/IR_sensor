@@ -26,7 +26,7 @@ Then poll `http://127.0.0.1:8080/api/status`.
 | :--- | :--- |
 | `--host 0.0.0.0` | Listen on all interfaces, e.g. so a real tablet on the LAN can reach it. The default is `127.0.0.1`. |
 | `--port N` | Port to listen on. Default 8080. |
-| `--seed N` | Start with N finished recordings (5/10/30 s at 10 kHz), so the app has something to list and graph straight away. |
+| `--seed N` | Start with N finished recordings, so the app has something to list and graph straight away. They cycle through 5 s at 10 kHz, 10 s at 2 kHz, 30 s at 10 kHz, 10 s at 1 kHz, 5 s at 20 kHz and 30 s at 5 kHz, so `--seed 6` covers every rate. |
 | `--data-dir DIR` | Persist recordings (`DIR/00042.irec`, the same names as on the device), the ID counter and the settings (`DIR/device.json`) across restarts. Without it, all state is in memory. |
 | `--time-scale X` | Run device time X× faster: recording progress, saving and compression. Handy for quick demos. |
 | `--capacity BYTES` | Storage size used for `free_bytes` and the space check. Default 25 MiB. Make it small to test `insufficient_space`. |
@@ -95,6 +95,9 @@ The tests run with a 10× time scale and take about 10 s. They cover:
 
 - A 32-byte little-endian header that stores the actual rate in mHz. Until rates
   are measured on hardware, it equals the nominal rate, as in `recording.cpp`.
+  The valid rates are 1, 2, 5, 10 and 20 kHz. The cap is 300 s at all of them
+  except 20 kHz, where it is 120 s. The same rates are valid for
+  `default_sample_rate_hz`.
 - `zlib.crc32` of the uncompressed `uint16_le` samples.
 - Compressing a file sets flag bit 0 and zlib-compresses the payload. The CRC
   doesn't change.

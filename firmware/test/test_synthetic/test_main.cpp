@@ -21,7 +21,7 @@ static void test_pulse_and_baseline() {
 
 static void test_same_timing_at_every_rate() {
     // 100 ms in is baseline, 250 ms in is a pulse — regardless of rate
-    for (uint32_t rate : {1000u, 5000u, 10000u, 20000u}) {
+    for (uint32_t rate : {1000u, 2000u, 5000u, 10000u, 20000u}) {
         TEST_ASSERT_TRUE(near(synthetic::sample(rate / 10, rate), synthetic::BASELINE));
         TEST_ASSERT_TRUE(near(synthetic::sample(rate / 4, rate), synthetic::PULSE_LEVEL));
     }

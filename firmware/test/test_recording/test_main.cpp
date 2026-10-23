@@ -11,12 +11,14 @@ static constexpr uint64_t PLENTY = 30ULL * 1024 * 1024;
 
 static void test_valid_rates() {
     TEST_ASSERT_TRUE(recording::is_valid_rate(1000));
+    TEST_ASSERT_TRUE(recording::is_valid_rate(2000));
     TEST_ASSERT_TRUE(recording::is_valid_rate(20000));
     TEST_ASSERT_FALSE(recording::is_valid_rate(0));
     TEST_ASSERT_FALSE(recording::is_valid_rate(8000));
 }
 
 static void test_duration_caps() {
+    TEST_ASSERT_EQUAL_UINT32(300, recording::max_duration_s(2000));
     TEST_ASSERT_EQUAL_UINT32(300, recording::max_duration_s(10000));
     TEST_ASSERT_EQUAL_UINT32(120, recording::max_duration_s(20000));
     TEST_ASSERT_EQUAL_UINT32(0, recording::max_duration_s(1234));
@@ -40,6 +42,7 @@ static void test_validate_free_space_includes_margin() {
 
 static void test_actual_rate_defaults_to_nominal() {
     TEST_ASSERT_EQUAL_UINT32(10000000, recording::actual_rate_mhz(10000));
+    TEST_ASSERT_EQUAL_UINT32(2000000, recording::actual_rate_mhz(2000));
     TEST_ASSERT_EQUAL_UINT32(0, recording::actual_rate_mhz(42));
 }
 

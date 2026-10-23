@@ -205,6 +205,8 @@ class MockDeviceTest(unittest.TestCase):
             ({"duration_s": 0, "sample_rate_hz": 1000}, "invalid_duration"),
             ({"duration_s": 301, "sample_rate_hz": 10000}, "invalid_duration"),
             ({"duration_s": 121, "sample_rate_hz": 20000}, "invalid_duration"),
+            ({"duration_s": 301, "sample_rate_hz": 2000}, "invalid_duration"),
+            ({"duration_s": 10, "sample_rate_hz": 2500}, "invalid_rate"),
             ({"duration_s": 1.5, "sample_rate_hz": 1000}, "invalid_duration"),
             # both fields required; rate is checked first (api.cpp handle_record_start)
             ({"duration_s": 10}, "invalid_rate"),
@@ -237,6 +239,11 @@ class MockDeviceTest(unittest.TestCase):
         self.record(duration_s=300, rate_hz=10000)
         self.request("POST", "/api/record/stop")
         self.wait_idle()
+        self.record(duration_s=300, rate_hz=2000)  # 2 kHz is capped at 300 s, like 1/5/10 kHz
+        self.request("POST", "/api/record/stop")
+        self.wait_idle()
+        self.assertEqual([server.max_duration_s(r) for r in server.SAMPLE_RATES_HZ],
+                         [300, 300, 300, 300, 120])
 
     def test_insufficient_space(self):
         self.tearDown()
@@ -306,6 +313,22 @@ class MockDeviceTest(unittest.TestCase):
     def record_after_idle(self, **kw):
         self.wait_idle()
         return self.record(**kw)
+
+    def test_two_khz_recording(self):
+        rec_id = self.record(duration_s=2, rate_hz=2000)
+        self.wait_idle()
+        entry = self.recordings()[0]
+        self.assertEqual((entry["id"], entry["sample_rate_mhz"], entry["sample_count"],
+                          entry["duration_ms"]), (rec_id, 2000000, 4000, 2000))
+        self.check_irec(self.request("GET", "/api/recordings/%d" % rec_id, raw=True)[1])
+
+    def test_seed_covers_every_rate(self):
+        self.device.seed(6)
+        recs = self.recordings()
+        self.assertEqual({r["sample_rate_mhz"] // 1000 for r in recs},
+                         set(server.SAMPLE_RATES_HZ))
+        for r in recs:
+            self.check_irec(self.request("GET", "/api/recordings/%d" % r["id"], raw=True)[1])
 
     def test_header_attenuation(self):
         self.assertEqual([server.num_tenths(t) for t in (0, 25, 60, 120)], [0, 2.5, 6, 12])
@@ -394,6 +417,8 @@ class MockDeviceTest(unittest.TestCase):
                          (400, {"error": "invalid_setting", "field": "screen_timeout_s"}))
         self.assertEqual(self.request("POST", "/api/settings", {"wifi_ssid": "x"}),
                          (400, {"error": "unknown_setting", "field": "wifi_ssid"}))
+        self.assertEqual(self.request("POST", "/api/settings", {"default_sample_rate_hz": 2000})
+                         [1]["default_sample_rate_hz"], 2000)
         # all-or-nothing
         self.request("POST", "/api/settings", {"brightness": "low", "default_sample_rate_hz": 3})
         self.assertEqual(self.request("GET", "/api/settings")[1]["brightness"], "high")

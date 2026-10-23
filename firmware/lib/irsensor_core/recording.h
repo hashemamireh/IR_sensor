@@ -8,7 +8,7 @@
 
 namespace recording {
 
-constexpr uint32_t SAMPLE_RATES_HZ[]      = {1000, 5000, 10000, 20000};
+constexpr uint32_t SAMPLE_RATES_HZ[]      = {1000, 2000, 5000, 10000, 20000};
 constexpr uint32_t DEFAULT_SAMPLE_RATE_HZ = 10000;
 constexpr uint32_t MAX_DURATION_S         = 300;
 constexpr uint32_t MAX_DURATION_20KHZ_S   = 120;  // PSRAM budget (§4.4)

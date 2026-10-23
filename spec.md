@@ -60,7 +60,7 @@ Build a battery-powered, handheld IR sensor recording device that:
 | Resolution | 12-bit (0–4095) |
 | Attenuation | **12 dB** — covers the full 0–3.3 V input range, which the ESP32-C5 converts accurately end to end. 6 dB was rejected: its full scale is V<sub>ref</sub> ÷ 0.5 and V<sub>ref</sub> varies 1.0–1.2 V between chips, so it tops out anywhere from 2.0 to 2.4 V and could clip the OPT101's ~2.15 V peak on some chips. Cost: ~1.1 mV per count instead of ~0.55 mV (the OPT101's range spans ~2000 counts), irrelevant for timing. Fixed in firmware; recorded in every file header (§4.2) |
 | Sampling mode | **Continuous mode with DMA** (GDMA controller) |
-| Configurable rates | 1 kHz, 5 kHz, **10 kHz** (default), 20 kHz (nominal — see §3.5) |
+| Configurable rates | 1 kHz, 2 kHz, 5 kHz, **10 kHz** (default), 20 kHz (nominal — see §3.5) |
 | Channel during recording | OPT101 channel only |
 
 ### 3.3. DMA Strategy
@@ -165,7 +165,7 @@ Data payload:
 
 ### 4.4. Recording Constraints
 
-- **Maximum duration**: **300 s** at 1, 5 and 10 kHz; **120 s** at 20 kHz. The whole recording is
+- **Maximum duration**: **300 s** at 1, 2, 5 and 10 kHz; **120 s** at 20 kHz. The whole recording is
   held in PSRAM until capture ends (§3.3); ~6 MB of PSRAM is reserved for this at boot, and 300 s
   at 20 kHz (12 MB) would not fit.
 - **Saving**: after capture stops, the PSRAM buffer is written to LittleFS. This takes a few
@@ -330,7 +330,7 @@ From the **Status Screen** (shown on wake), a **short press** opens the **Main M
 ├── 🔴 Record
 │   ├── Quick Start (uses last-used duration + sample rate)
 │   ├── Set Duration → [5s │ 10s │ 30s │ 60s │ 120s │ 300s]  (300s hidden at 20 kHz)
-│   └── Set Sample Rate → [1 kHz │ 5 kHz │ 10 kHz │ 20 kHz]
+│   └── Set Sample Rate → [1 kHz │ 2 kHz │ 5 kHz │ 10 kHz │ 20 kHz]
 │
 ├── 📂 Recordings
 │   ├── [#42 10-01 14:23 30s]  (newest first; times in UTC)
@@ -353,7 +353,7 @@ From the **Status Screen** (shown on wake), a **short press** opens the **Main M
 ├── ⚙️ Settings
 │   ├── Screen Brightness → [Low │ Medium │ High]
 │   ├── Screen Timeout → [30s │ 1 min │ 5 min │ Never]
-│   ├── Default Sample Rate → [1 kHz │ 5 kHz │ 10 kHz │ 20 kHz]
+│   ├── Default Sample Rate → [1 kHz │ 2 kHz │ 5 kHz │ 10 kHz │ 20 kHz]
 │   └── Default Duration → [5s │ 10s │ 30s │ 60s]
 │
 └── 💤 Deep Sleep → [Confirm? Yes / No]
@@ -662,7 +662,7 @@ loss and before the next sync has a start time near 1970. The app treats any sta
    - Set recording duration: single-select chips for 5 s, 10 s, 30 s, 1 min, 2 min, 5 min
      (5 min hidden at 20 kHz), plus "Custom" for any whole number of seconds up to the cap —
      300 s, or 120 s at 20 kHz (§4.4)
-   - Set sample rate: single-select chips (1 kHz, 5 kHz, 10 kHz, 20 kHz)
+   - Set sample rate: single-select chips (1 kHz, 2 kHz, 5 kHz, 10 kHz, 20 kHz)
    - Start / stop recording remotely
    - Real-time progress indicator during recording
    - Automatic download of recordings (§10.4); a recording started from the app opens in the

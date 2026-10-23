@@ -78,7 +78,7 @@ def duration_ms(h):
 
 # --- Recording limits (recording.h / recording.cpp) ------------------------
 
-SAMPLE_RATES_HZ = (1000, 5000, 10000, 20000)
+SAMPLE_RATES_HZ = (1000, 2000, 5000, 10000, 20000)
 DEFAULT_SAMPLE_RATE_HZ = 10000
 MAX_DURATION_S = 300
 MAX_DURATION_20KHZ_S = 120
@@ -87,7 +87,8 @@ FS_MARGIN_BYTES = 64 * 1024
 MAX_ID = 99999
 
 # §3.5: actual rate per nominal rate. Nominal until measured on hardware.
-ACTUAL_RATES_MHZ = {1000: 1000000, 5000: 5000000, 10000: 10000000, 20000: 20000000}
+ACTUAL_RATES_MHZ = {1000: 1000000, 2000: 2000000, 5000: 5000000, 10000: 10000000,
+                    20000: 20000000}
 
 
 def is_valid_rate(rate_hz):
@@ -617,16 +618,19 @@ class Device:
             except FileNotFoundError:
                 pass
 
+    # (duration_s, rate_hz) for --seed, cycled; six covers every rate
+    SEED_RECORDINGS = ((5, 10000), (10, 2000), (30, 10000), (10, 1000), (5, 20000), (30, 5000))
+
     def seed(self, n):
-        """Adds n finished recordings (5–30 s at 10 kHz) so the app has data at startup."""
+        """Adds n finished recordings (SEED_RECORDINGS) so the app has data at startup."""
         with self.lock:
             for k in range(n):
                 rec_id = self.next_id
                 self.next_id += 1
-                duration_s = (5, 10, 30)[k % 3]
-                rate_mhz = ACTUAL_RATES_MHZ[10000]
+                duration_s, rate_hz = self.SEED_RECORDINGS[k % len(self.SEED_RECORDINGS)]
+                rate_mhz = ACTUAL_RATES_MHZ[rate_hz]
                 start = self.now_utc_us() - (n - k) * 3600 * 1000000
-                data = build_irec(rec_id, rate_mhz, duration_s * 10000, start,
+                data = build_irec(rec_id, rate_mhz, duration_s * rate_mhz // 1000, start,
                                   self._is_overrun(rec_id))
                 self.recordings[rec_id] = data
                 self._write_file(rec_id, data)
@@ -897,7 +901,7 @@ class DeviceServer:
 
     def _sleep(self):
         self.stop()
-        log("asleep — %s" % ("waking in %g s" % self.wake_after if self.wake_after
+        self._log("asleep — %s" % ("waking in %g s" % self.wake_after if self.wake_after
                              else "send SIGUSR1 or restart to wake"))
         if self.wake_after:
             t = threading.Timer(self.wake_after, self.wake)
@@ -909,7 +913,12 @@ class DeviceServer:
             return
         self.device.wake()
         self.start()
-        log("awake on port %d" % self.port)
+        self._log("awake on port %d" % self.port)
+
+
+    def _log(self, msg):
+        if not self.server_kw.get("quiet"):
+            log(msg)
 
 
 def log(msg):

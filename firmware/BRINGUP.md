@@ -372,6 +372,7 @@ Fill in as you go; numbers marked → feed back into code or the spec.
 | Brightest OPT101 output (counts / mV), any clipping? | |
 | Device mV vs multimeter on the OPT101 output | |
 | → Actual rate @ 1 kHz (Hz) | |
+| → Actual rate @ 2 kHz (Hz) | |
 | → Actual rate @ 5 kHz (Hz) | |
 | → Actual rate @ 10 kHz (Hz) | |
 | → Actual rate @ 20 kHz (Hz) | |

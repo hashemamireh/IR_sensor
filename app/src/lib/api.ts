@@ -45,7 +45,7 @@ export interface DeviceSettings {
 	default_duration_s: 5 | 10 | 30 | 60;
 }
 
-export const SAMPLE_RATES_HZ = [1000, 5000, 10000, 20000] as const;
+export const SAMPLE_RATES_HZ = [1000, 2000, 5000, 10000, 20000] as const;
 export const MAX_DURATION_S = 300;
 export const MAX_DURATION_20K_S = 120;
 export const maxDurationS = (rateHz: number) => (rateHz === 20000 ? MAX_DURATION_20K_S : MAX_DURATION_S);
