@@ -28,7 +28,23 @@
 		return () => ctl?.stop();
 	});
 
-	const current = $derived(dev?.locals.find((l) => localKey(l) === selected) ?? null);
+	let compare = $state<string[]>([]);
+	const MAX_TRACES = 8;
+
+	// The graph's recordings: the selected one first, then the compared ones
+	const shown = $derived.by(() => {
+		const byKey = new Map((dev?.locals ?? []).map((l) => [localKey(l), l]));
+		return [selected, ...compare].flatMap((k) => (k && byKey.has(k) ? [byKey.get(k)!] : []));
+	});
+
+	function removeTrace(key: string) {
+		if (key === selected) {
+			selected = compare[0] ?? null;
+			compare = compare.slice(1);
+		} else {
+			compare = compare.filter((k) => k !== key);
+		}
+	}
 
 	// A recording started from the app opens once it has downloaded
 	$effect(() => {
@@ -63,14 +79,14 @@
 		<main>
 			<aside>
 				<RecordPanel {dev} />
-				<RecordingsList {dev} bind:selected />
+				<RecordingsList {dev} bind:selected bind:compare maxTraces={MAX_TRACES} />
 			</aside>
 			<section class="viewer">
-				{#if current}
-					<Graph recording={current} store={dev.local} />
+				{#if shown.length}
+					<Graph recordings={shown} {dev} onremove={(r) => removeTrace(localKey(r))} />
 				{:else}
 					<div class="empty muted">
-						<p>Select a recording on this tablet to see its graph.</p>
+						<p>Select a recording on this tablet to see its graph, or use “+ Compare” to overlay several.</p>
 						<p>New recordings are downloaded automatically when they finish.</p>
 					</div>
 				{/if}

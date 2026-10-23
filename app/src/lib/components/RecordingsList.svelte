@@ -1,16 +1,43 @@
 <script lang="ts">
 	import type { DeviceController } from '$lib/device.svelte';
 	import { bytes, duration, localTime, rate, utcTime } from '$lib/format';
-	import { mergeRecordings, type RecordingRow } from '$lib/recordings';
+	import { displayName, matchesSearch, mergeRecordings, type RecordingRow } from '$lib/recordings';
 	import Dialog from './Dialog.svelte';
 
 	let {
 		dev,
 		selected = $bindable(),
-	}: { dev: DeviceController; selected: string | null } = $props();
+		compare = $bindable(),
+		maxTraces,
+	}: { dev: DeviceController; selected: string | null; compare: string[]; maxTraces: number } = $props();
 
-	const rows = $derived(mergeRecordings(dev.online ? dev.ssid : null, dev.online ? dev.deviceRecordings : null, dev.locals));
-	const onDevice = $derived(rows.filter((r) => r.device));
+	const allRows = $derived(mergeRecordings(dev.online ? dev.ssid : null, dev.online ? dev.deviceRecordings : null, dev.locals));
+	const onDevice = $derived(allRows.filter((r) => r.device));
+	let query = $state('');
+	const rows = $derived(allRows.filter((r) => matchesSearch(r, query)));
+
+	/** Tap: show this recording alone */
+	function open(key: string) {
+		selected = key;
+		compare = [];
+	}
+
+	/** Compare: add to / remove from the graph's extra traces */
+	function toggleCompare(key: string) {
+		if (key === selected) {
+			// Removing the main trace promotes the next one
+			selected = compare[0] ?? null;
+			compare = compare.slice(1);
+		} else if (compare.includes(key)) {
+			compare = compare.filter((k) => k !== key);
+		} else if (!selected) {
+			selected = key;
+		} else if (compare.length + 1 < maxTraces) {
+			compare = [...compare, key];
+		}
+	}
+	const inGraph = (key: string) => key === selected || compare.includes(key);
+	const full = $derived((selected ? 1 : 0) + compare.length >= maxTraces);
 
 	// ── Delete one ──────────────────────────────────────────────────────────
 	let deleting = $state<RecordingRow | null>(null);
@@ -40,7 +67,7 @@
 		});
 		busy = false;
 		if (ok) {
-			if (fromTablet && selected === row.key) selected = null;
+			if (fromTablet && inGraph(row.key)) toggleCompare(row.key);
 			deleting = null;
 		}
 	}
@@ -59,11 +86,13 @@
 
 <section>
 	<div class="head">
-		<h2>Recordings <span class="muted">{rows.length}</span></h2>
+		<h2>Recordings <span class="muted">{query ? `${rows.length} of ${allRows.length}` : allRows.length}</span></h2>
 		<button class="danger small" disabled={!dev.idle || onDevice.length === 0} onclick={() => (deletingAll = true)}>
 			Delete all on device
 		</button>
 	</div>
+
+	<input class="search" type="search" placeholder="Search names, tags, notes, #id" bind:value={query} />
 
 	{#if !dev.online}
 		<p class="muted note">Device offline — showing recordings on this tablet.</p>
@@ -74,13 +103,14 @@
 	<ul>
 		{#each rows as row (row.key)}
 			{@const failed = dev.failed[row.key]}
-			<li class:selected={selected === row.key}>
-				<button class="main" disabled={!row.local} onclick={() => (selected = row.key)}>
+			<li class:selected={selected === row.key} class:compared={compare.includes(row.key)}>
+				<button class="main" disabled={!row.local} onclick={() => open(row.key)}>
 					<span class="line1">
-						<strong>#{row.id}</strong>
-						<span title={utcTime(row.start_utc_us)}>{localTime(row.start_utc_us)}</span>
+						<strong class="title">{row.local ? displayName(row.local) : `#${row.id}`}</strong>
+						{#if row.local?.name}<span class="muted">#{row.id}</span>{/if}
 					</span>
 					<span class="line2 muted">
+						<span title={utcTime(row.start_utc_us)}>{localTime(row.start_utc_us)}</span> ·
 						{duration(row.duration_ms)} · {rate(row.sample_rate_mhz)}
 						{#if row.device}· {bytes(row.device.size_bytes)}{:else if row.local}· {bytes(row.local.size_bytes)}{/if}
 						{#if row.ssid !== dev.ssid}· {row.ssid}{/if}
@@ -91,10 +121,21 @@
 						{#if row.overrun}<span class="badge warn">overrun</span>{/if}
 						{#if row.local && !row.local.crc_ok}<span class="badge danger">CRC failed</span>{/if}
 						{#if dev.downloading === row.key}<span class="badge">downloading…</span>{/if}
+						{#each row.local?.tags ?? [] as t (t)}<span class="badge tag">{t}</span>{/each}
 					</span>
 					{#if failed}<span class="err">{failed}</span>{/if}
 				</button>
 				<div class="actions">
+					{#if row.local}
+						<button
+							class="small"
+							class:on={inGraph(row.key)}
+							disabled={!inGraph(row.key) && full}
+							aria-pressed={inGraph(row.key)}
+							title={full && !inGraph(row.key) ? `At most ${maxTraces} traces` : 'Show on the graph with the others'}
+							onclick={() => toggleCompare(row.key)}>{inGraph(row.key) ? '✓ Compare' : '+ Compare'}</button
+						>
+					{/if}
 					{#if row.device && !row.local && dev.downloading !== row.key && (failed || dev.isSkipped(row.key))}
 						<button class="small" disabled={!dev.idle} onclick={() => dev.downloadNow(row.device!)}>
 							{failed ? 'Retry' : 'Download'}
@@ -104,7 +145,7 @@
 				</div>
 			</li>
 		{:else}
-			<li class="empty muted">No recordings yet.</li>
+			<li class="empty muted">{query ? 'Nothing matches.' : 'No recordings yet.'}</li>
 		{/each}
 	</ul>
 </section>
@@ -180,6 +221,21 @@
 		margin: 0;
 		font-size: 16px;
 	}
+	.search {
+		min-height: 40px;
+		width: 100%;
+	}
+	li.compared {
+		border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+	}
+	.small.on {
+		border-color: var(--accent);
+		background: color-mix(in srgb, var(--accent) 18%, var(--panel-2));
+	}
+	.badge.tag {
+		color: var(--accent);
+		border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+	}
 	.small {
 		min-height: 38px;
 		padding: 0 12px;
@@ -232,7 +288,14 @@
 	}
 	.line1 {
 		display: flex;
-		gap: 10px;
+		gap: 8px;
+		align-items: baseline;
+		min-width: 0;
+	}
+	.title {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.line2 {
 		font-size: 13px;

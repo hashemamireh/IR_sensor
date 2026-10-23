@@ -135,12 +135,17 @@ export class LocalStore {
 	): Promise<LocalRecording> {
 		const key = recordingKey(ssid, entry.id, entry.start_utc_us);
 		let base = '';
+		let previous: Sidecar | null = null;
 		for (let attempt = 1; ; attempt++) {
 			base = baseName(ssid, entry.id, attempt);
 			const existing = await this.be.readText(`recordings/${base}.json`);
 			if (existing === null) break;
 			try {
-				if (localKey(JSON.parse(existing)) === key) break; // same recording: replace it
+				const s = JSON.parse(existing) as Sidecar;
+				if (localKey(s) === key) {
+					previous = s; // same recording: replace it, keeping the user's fields
+					break;
+				}
 			} catch {
 				break; // unreadable: reuse the name
 			}
@@ -162,14 +167,22 @@ export class LocalStore {
 			crc32: crc.crc32,
 			crc_ok: crc.ok,
 			calibration,
-			name: null,
-			notes: '',
-			tags: [],
+			name: previous?.name ?? null,
+			notes: previous?.notes ?? '',
+			tags: previous?.tags ?? [],
 		};
 		// .irec first: a sidecar only exists once its recording is complete
 		await this.be.writeBytes(`recordings/${sidecar.file}`, bytes);
 		await this.be.writeText(`recordings/${base}.json`, sidecarJson(sidecar));
 		return { ...sidecar, sidecar: `${base}.json` };
+	}
+
+	/** Changes the user's fields (tablet-only, decision E5) and rewrites the sidecar */
+	async updateMeta(r: LocalRecording, patch: Partial<Pick<Sidecar, 'name' | 'notes' | 'tags'>>): Promise<LocalRecording> {
+		const { sidecar, ...current } = r;
+		const next: Sidecar = { ...current, ...patch };
+		await this.be.writeText(`recordings/${sidecar}`, sidecarJson(next));
+		return { ...next, sidecar };
 	}
 
 	readIrec(r: LocalRecording): Promise<Uint8Array> {

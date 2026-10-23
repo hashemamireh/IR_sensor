@@ -14,6 +14,19 @@ Milestone 1 does the following:
 - Deletes recordings from the device and/or the tablet, including "delete all on device".
 - Shows a recording as a zoomable graph in mV, with an overrun warning.
 
+Milestone 2 adds:
+
+- **Overlays:** up to 8 recordings on one graph, aligned by start or by first rising
+  edge, with a manual offset per trace and live values under the pointer.
+- **Export:** CSV or JSON, of the whole recording or the visible window, at full or
+  lower (block-averaged) resolution.
+- **Device settings:** brightness, screen timeout, and the device's Quick Start rate
+  and duration.
+- **Names, tags and notes** on tablet recordings, and a search box for the list.
+
+Measurement cursors wait for the Surface test. Statistics and image export are
+dropped for now.
+
 ## Setup
 
 You need Rust (stable), Node 20 or newer, pnpm, and the system libraries Tauri needs.
@@ -189,6 +202,8 @@ database.
 - **What the sidecar holds:** the device's list entry, the CRC result, and the device's
   calibration table at download time (or `null` if the chip has none). See `Sidecar`
   in `recordings.ts` for the schema.
+- **Names, tags and notes** live only in the sidecar, on this tablet; the device has
+  no API for them. Saving a recording again (a manual re-download) keeps them.
 
 ### Graph (`src/lib/components/Graph.svelte`, `src/lib/graphView.ts`, `src/lib/decimate.ts`)
 
@@ -198,13 +213,49 @@ database.
   with a note.
 - **Speed:** uPlot only gets the visible window, reduced to the minimum and maximum of
   each pixel column at their real sample times. Pulse edges stay in place, and once
-  you zoom in far enough you see the raw samples.
+  you zoom in far enough you see the raw samples. A per-trace summary (min/max per
+  block of 64 and 4096 samples) keeps each redraw about the same cost however long the
+  recordings are: 8 × 3 M samples redraw in about 3 ms on an M-series Mac instead of 48.
+- **Overlays:** "+ Compare" on a list row adds it to the graph; the first recording
+  is the main one (its name, tags, notes and Export). Each trace's legend chip shows
+  its value under the pointer, hides or shows it, and holds a manual offset in ms.
+  - **By start:** every recording's first sample at t = 0.
+  - **By first edge:** every recording's first rising crossing of its min–max
+    midpoint at t = 0, interpolated between samples. A trace with no edge stays
+    aligned by start, with a note.
+  - **Units:** mV only if every trace has a matching calibration table; otherwise all
+    are shown in counts.
 - **Gestures:** the app handles zoom and pan itself:
   - Scroll wheel or trackpad: zoom around the pointer. Sideways scroll pans.
   - Drag: pan.
   - Two-finger pinch: keeps the two times under your fingers pinned, so it zooms and
     pans at once.
   - Double-click: reset.
+
+### Export (`src/lib/export.ts`, `src/lib/exportFile.ts`)
+
+Export… exports the main recording, always from the real samples, never the graph's
+thinned view.
+
+- **CSV:** `timestamp_ms,raw_adc,voltage_mv`. Times are ms since the recording's first
+  sample, to 1 µs. `voltage_mv` is empty without a calibration table.
+- **JSON:** one object: `recording` (metadata, name, tags, notes), the rates,
+  `first_timestamp_ms` and `timestamp_step_ms`, `calibration_mv`, then the `raw_adc`
+  and `voltage_mv` arrays.
+- **Range:** the whole recording, or the part of it in the visible window.
+- **Resolution:** full, or a lower rate made by averaging each block of N samples.
+  Each row is timed at its block's centre, and `voltage_mv` is averaged after
+  converting each sample. Times are then only good to about one output period.
+- **Where:** a Save dialog starting in `~/IRSensor/exports/`. The file is written in
+  chunks, so memory stays flat; a cancelled or failed export removes the partial
+  file. In browser mode the file downloads instead.
+
+### Device settings
+
+**Settings** in the status bar reads the device's settings (allowed in any state) and
+saves only what you changed. Saving is disabled while the device is busy; nothing is
+queued. The Quick Start values only affect the device's own menu, not the app's
+record settings.
 
 ### Times
 
@@ -222,6 +273,9 @@ These can only be checked on the real tablet. Please report back:
 - [ ] Panning and zooming a 300 s, 10 kHz recording (3 M samples) feels smooth enough.
 - [ ] Buttons and chips are easy to hit with a finger.
 - [ ] The recording list and graph fit on the 1920×1280 screen at the default scaling.
+- [ ] With 3–8 long recordings overlaid, zoom and pan still feel smooth.
+- [ ] The legend chips (hide/show, − / + offset, ✕) are big enough to tap.
+- [ ] Export of a long recording to CSV finishes, and the file opens.
 
 ## Layout
 
@@ -234,8 +288,11 @@ app/
 │   ├── irec.ts              IREC reader: header, zlib (fflate), CRC-32
 │   ├── recordings.ts        sidecar schema, device ↔ tablet matching
 │   ├── storage.ts           files under ~/IRSensor (Tauri fs plugin)
-│   ├── decimate.ts          min/max decimation for the graph
-│   ├── graphView.ts         uPlot wrapper + gestures
+│   ├── decimate.ts          min/max decimation + per-trace summary for the graph
+│   ├── graphView.ts         uPlot wrapper (several traces) + gestures
+│   ├── align.ts             overlay alignment: start, first edge, manual offset
+│   ├── export.ts            CSV / JSON export, chunked, optional averaging
+│   ├── exportFile.ts        Save dialog + streaming the export to disk
 │   ├── format.ts            local time, sizes, rates
 │   ├── components/          StatusBar, RecordPanel, RecordingsList, Graph, …
 │   └── fixtures/            IREC test files from the mock

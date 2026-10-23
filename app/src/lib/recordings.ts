@@ -54,6 +54,25 @@ export function baseName(ssid: string, id: number, attempt = 1): string {
 	return attempt === 1 ? base : `${base}-${attempt}`;
 }
 
+/** The user's name for a recording, else its device ID */
+export const displayName = (r: { name?: string | null; id: number }) => r.name?.trim() || `#${r.id}`;
+
+/** Every tag used on the tablet, most used first (for suggestions) */
+export function allTags(locals: Pick<Sidecar, 'tags'>[]): string[] {
+	const counts = new Map<string, number>();
+	for (const l of locals) for (const t of l.tags ?? []) counts.set(t, (counts.get(t) ?? 0) + 1);
+	return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t]) => t);
+}
+
+/** Search the list: every word must appear in the ID, name, tags or notes */
+export function matchesSearch(row: RecordingRow, query: string): boolean {
+	const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+	if (!words.length) return true;
+	const l = row.local;
+	const hay = [`#${row.id}`, l?.name ?? '', ...(l?.tags ?? []), l?.notes ?? ''].join('\n').toLowerCase();
+	return words.every((w) => hay.includes(w));
+}
+
 /** One row of the recordings list: on the device, on the tablet, or both */
 export interface RecordingRow {
 	key: string;

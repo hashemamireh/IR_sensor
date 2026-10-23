@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decimate } from './decimate';
+import { decimate, Summary, valueAt } from './decimate';
 
 const ramp = (n: number) => Uint16Array.from({ length: n }, (_, i) => i % 4096);
 
@@ -41,5 +41,37 @@ describe('decimate', () => {
 	it('handles empty and inverted ranges', () => {
 		expect(decimate({ samples: new Uint16Array(0), rateHz: 1000 }, 0, 1, 10)[0].length).toBe(0);
 		expect(decimate({ samples: ramp(10), rateHz: 1000 }, 1, 0, 10)[0].length).toBe(0);
+	});
+});
+
+describe('decimate with a Summary', () => {
+	// Deterministic pseudo-random data with plateaus (ties) and spikes
+	function data(n: number, seed: number) {
+		let x = seed;
+		const rnd = () => ((x = (x * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+		return Uint16Array.from({ length: n }, (_, i) => (i % 5000 < 300 ? 2000 : Math.floor(rnd() * 60)) + (rnd() < 0.0005 ? 1500 : 0));
+	}
+
+	it('gives exactly the same points as the brute-force scan', () => {
+		const samples = data(1_000_003, 7);
+		const lut = Float32Array.from({ length: 4096 }, (_, i) => i * 0.8 + Math.sin(i / 300) * 4);
+		for (const l of [null, lut]) {
+			const plain = { samples, rateHz: 10_000, lut: l };
+			const fast = { ...plain, summary: new Summary(samples, l) };
+			for (const [t0, t1, cols] of [[0, 100.0003, 900], [3.2771, 61.3, 1234], [99.9, 100.0003, 50], [0.0001, 0.5, 777]]) {
+				const a = decimate(plain, t0, t1, cols);
+				const b = decimate(fast, t0, t1, cols);
+				expect(Array.from(b[0])).toEqual(Array.from(a[0]));
+				expect(Array.from(b[1])).toEqual(Array.from(a[1]));
+			}
+		}
+	});
+
+	it('looks up the nearest sample for the hover readout', () => {
+		const samples = Uint16Array.from([5, 6, 7, 8]);
+		expect(valueAt({ samples, rateHz: 10 }, 0.26)).toBe(8);
+		expect(valueAt({ samples, rateHz: 10 }, 0.04)).toBe(5);
+		expect(valueAt({ samples, rateHz: 10 }, -0.1)).toBeNull();
+		expect(valueAt({ samples, rateHz: 10 }, 0.5)).toBeNull();
 	});
 });

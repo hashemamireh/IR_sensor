@@ -12,7 +12,7 @@
 //   also covers recordings made from the device menu or while the tablet was away,
 //   and 0-sample recordings that the firmware never saves.
 import { SvelteSet } from 'svelte/reactivity';
-import { ApiError, DeviceApi, type Calibration, type DeviceRecording, type Status } from './api';
+import { ApiError, DeviceApi, type Calibration, type DeviceRecording, type DeviceSettings, type Status } from './api';
 import { errorText } from './format';
 import { parseIrec } from './irec';
 import { missingLocally, recordingKey, type LocalRecording } from './recordings';
@@ -404,6 +404,26 @@ export class DeviceController {
 			this.notice = { kind: 'info', text: `Deleted ${r.deleted} recording${r.deleted === 1 ? '' : 's'} from the device` };
 		}
 		return r?.deleted;
+	}
+
+	/** Saves name / tags / notes in the recording's sidecar */
+	async updateMeta(r: LocalRecording, patch: Partial<Pick<LocalRecording, 'name' | 'notes' | 'tags'>>) {
+		try {
+			const updated = await this.local.updateMeta(r, patch);
+			this.locals = this.locals.map((l) => (l.sidecar === r.sidecar ? updated : l));
+		} catch (e) {
+			this.notice = { kind: 'error', text: `Couldn't save: ${errorText(e)}` };
+		}
+	}
+
+	/** Throws ApiError / network errors for the caller to show */
+	loadSettings(): Promise<DeviceSettings> {
+		return this.exclusive((api) => api.getSettings());
+	}
+
+	/** Throws ApiError (409 while busy, 400 invalid_setting) / network errors */
+	saveSettings(changes: Partial<DeviceSettings>): Promise<DeviceSettings> {
+		return this.exclusive((api) => api.setSettings(changes));
 	}
 
 	isSkipped(key: string) {

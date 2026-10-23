@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { DEVICE_URL, MOCK_URL, type DeviceController } from '$lib/device.svelte';
 	import { bytes } from '$lib/format';
+	import SettingsDialog from './SettingsDialog.svelte';
 
 	let { dev }: { dev: DeviceController } = $props();
 
 	let open = $state(false);
 	let custom = $state('');
+	let settingsOpen = $state(false);
 
 	const host = $derived(dev.baseUrl.replace(/^https?:\/\//, ''));
 	const label = $derived(
@@ -47,6 +49,8 @@
 
 	<span class="spacer"></span>
 
+	<button disabled={!dev.online} onclick={() => (settingsOpen = true)} title="Device settings">Settings</button>
+
 	<div class="target">
 		<button onclick={() => (open = !open)} aria-expanded={open}>Device: {host}</button>
 		{#if open}
@@ -71,6 +75,10 @@
 		{/if}
 	</div>
 </header>
+
+{#if settingsOpen}
+	<SettingsDialog {dev} onclose={() => (settingsOpen = false)} />
+{/if}
 
 <style>
 	header {

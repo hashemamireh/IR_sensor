@@ -1,29 +1,41 @@
-// uPlot wrapper for one recording: owns the visible time window, feeds uPlot the
-// decimated samples in it, and handles wheel, drag and pinch itself (uPlot's own
-// drag-to-select zoom is off — it doesn't do touch).
+// uPlot wrapper for one or more recordings on a shared time axis: owns the visible
+// window, feeds uPlot each trace's decimated samples in it, and handles wheel, drag
+// and pinch itself (uPlot's own drag-to-select zoom is off — it doesn't do touch).
+// Traces may have different rates; uPlot.join aligns them, with gaps spanned.
 import uPlot from 'uplot';
 import { decimate, type Series } from './decimate';
+
+export interface GraphTrace {
+	series: Series;
+	/** Where the recording's t = 0 sits on the shared axis (s) */
+	offsetS: number;
+	durationS: number;
+	visible: boolean;
+	color: string;
+}
+
+type Data = [Float64Array, Float64Array];
 
 export class GraphView {
 	private plot: uPlot;
 	private t0 = 0;
-	private t1: number;
+	private t1 = 1;
+	private lo = 0;
+	private hi = 1;
 	private frame = 0;
 	private ro: ResizeObserver;
 	private pointers = new Map<number, number>();
 	private gesture: { t0: number; t1: number; xs: Map<number, number> } | null = null;
-	private readonly minSpan: number;
+	private minSpan = 1e-4;
 
 	constructor(
 		private host: HTMLDivElement,
-		private series: Series,
-		private full: number,
+		private traces: GraphTrace[],
 		unit: string,
 		private onZoom: (z: number) => void,
+		/** Time (s, shared axis) under the pointer, or null when it leaves */
+		private onCursor: (t: number | null) => void,
 	) {
-		this.t1 = full || 1;
-		// Never zoom in past ~10 samples across the plot
-		this.minSpan = Math.min(this.t1, Math.max(10 / series.rateHz, 1e-4));
 		const css = getComputedStyle(host);
 		const c = (v: string) => css.getPropertyValue(v).trim();
 		const axis = { stroke: c('--muted'), grid: { stroke: c('--border'), width: 1 }, ticks: { stroke: c('--border'), width: 1 } };
@@ -45,27 +57,31 @@ export class GraphView {
 					{ ...axis, label: unit, labelSize: 20, size: 64 },
 				],
 				series: [
-					{ label: 'Time', value: (_u, v) => (v == null ? '—' : `${v.toFixed(4)} s`) },
-					{
-						label: unit,
-						stroke: c('--accent'),
-						width: 1,
-						points: { show: false },
-						value: (_u, v) => (v == null ? '—' : unit === 'mV' ? `${v.toFixed(1)} mV` : `${v}`),
-					},
+					{},
+					...traces.map((t) => ({ stroke: t.color, width: 1, show: t.visible, spanGaps: true, points: { show: false } })),
 				],
+				// The page draws its own legend with live values (Graph.svelte)
+				legend: { show: false },
 				cursor: { drag: { x: false, y: false, setScale: false }, points: { show: false } },
+				hooks: {
+					setCursor: [
+						(u) => {
+							const left = u.cursor.left;
+							this.onCursor(left == null || left < 0 ? null : u.posToVal(left, 'x'));
+						},
+					],
+				},
 			},
-			[[], []],
+			[[], ...traces.map(() => [])] as unknown as uPlot.AlignedData,
 			host,
 		);
+		this.applyTraces(true);
 		this.attachGestures();
 		this.ro = new ResizeObserver(() => {
 			this.plot.setSize(this.size());
 			this.render();
 		});
 		this.ro.observe(host);
-		this.render();
 	}
 
 	destroy() {
@@ -74,21 +90,48 @@ export class GraphView {
 		this.plot.destroy();
 	}
 
+	/** New offsets or visibility for the same traces; `reset` shows everything */
+	update(traces: GraphTrace[], reset = false) {
+		this.traces = traces;
+		this.applyTraces(reset);
+	}
+
+	private applyTraces(reset: boolean) {
+		const shown = this.traces.filter((t) => t.visible);
+		const span = shown.length ? shown : this.traces;
+		this.lo = Math.min(...span.map((t) => t.offsetS));
+		this.hi = Math.max(...span.map((t) => t.offsetS + t.durationS));
+		if (!(this.hi > this.lo)) this.hi = this.lo + 1;
+		// Never zoom in past ~10 samples of the fastest trace across the plot
+		const fastest = Math.max(...this.traces.map((t) => t.series.rateHz));
+		this.minSpan = Math.min(this.hi - this.lo, Math.max(10 / fastest, 1e-4));
+		this.traces.forEach((t, i) => {
+			if (this.plot.series[i + 1].show !== t.visible) this.plot.setSeries(i + 1, { show: t.visible });
+		});
+		if (reset) this.setView(this.lo, this.hi);
+		else this.setView(this.t0, this.t1);
+	}
+
 	private size() {
-		// The legend sits below the plot
-		return { width: Math.max(200, this.host.clientWidth), height: Math.max(150, this.host.clientHeight - 44) };
+		return { width: Math.max(200, this.host.clientWidth), height: Math.max(150, this.host.clientHeight) };
+	}
+
+	/** The visible window on the shared axis (s), or null when everything is shown */
+	get window(): [number, number] | null {
+		return this.t1 - this.t0 < (this.hi - this.lo) * 0.9999 ? [this.t0, this.t1] : null;
 	}
 
 	reset() {
-		this.setView(0, this.full);
+		this.setView(this.lo, this.hi);
 	}
 
 	private setView(t0: number, t1: number) {
-		let span = Math.min(Math.max(t1 - t0, this.minSpan), this.full || 1);
-		t0 = Math.min(Math.max(0, t0), (this.full || 1) - span);
+		const full = this.hi - this.lo;
+		const span = Math.min(Math.max(t1 - t0, this.minSpan), full);
+		t0 = Math.min(Math.max(this.lo, t0), this.hi - span);
 		this.t0 = t0;
 		this.t1 = t0 + span;
-		this.onZoom((this.full || 1) / span);
+		this.onZoom(full / span);
 		this.schedule();
 	}
 
@@ -99,9 +142,18 @@ export class GraphView {
 	private render() {
 		this.frame = 0;
 		const columns = this.plot.over.clientWidth || this.plot.width;
-		const [xs, ys] = decimate(this.series, this.t0, this.t1, columns);
+		const tables: Data[] = this.traces.map((t) => {
+			if (!t.visible) return [new Float64Array(0), new Float64Array(0)];
+			const [xs, ys] = decimate(t.series, this.t0 - t.offsetS, this.t1 - t.offsetS, columns);
+			if (t.offsetS) for (let i = 0; i < xs.length; i++) xs[i] += t.offsetS;
+			return [xs, ys];
+		});
+		const data =
+			tables.length === 1
+				? tables[0]
+				: uPlot.join(tables.map((t) => [Array.from(t[0]), Array.from(t[1])]) as uPlot.AlignedData[]);
 		this.plot.batch(() => {
-			this.plot.setData([xs as unknown as number[], ys as unknown as number[]], false);
+			this.plot.setData(data as unknown as uPlot.AlignedData, false);
 			this.plot.setScale('x', { min: this.t0, max: this.t1 });
 		});
 	}

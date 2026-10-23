@@ -34,6 +34,17 @@ export interface Calibration {
 	mv: number[];
 }
 
+/** GET/POST /api/settings (spec §8.2). Device-menu behaviour only, not the app's. */
+export interface DeviceSettings {
+	brightness: 'low' | 'medium' | 'high';
+	/** 0 = never */
+	screen_timeout_s: 30 | 60 | 300 | 0;
+	/** Quick Start's rate after each boot or wake */
+	default_sample_rate_hz: number;
+	/** Quick Start's duration after each boot or wake */
+	default_duration_s: 5 | 10 | 30 | 60;
+}
+
 export const SAMPLE_RATES_HZ = [1000, 5000, 10000, 20000] as const;
 export const MAX_DURATION_S = 300;
 export const MAX_DURATION_20K_S = 120;
@@ -63,10 +74,13 @@ const MESSAGES: Record<string, string> = {
 	storage_error: 'The device had a storage error',
 	calibration_unavailable: 'This chip has no ADC calibration data',
 	confirmation_required: 'The device asked for confirmation',
+	invalid_setting: 'The device rejected a setting',
+	unknown_setting: "The device doesn't know a setting",
 };
 
 function describeError(status: number, code: string, body: Record<string, unknown>) {
-	const msg = MESSAGES[code] ?? `HTTP ${status} ${code}`;
+	let msg = MESSAGES[code] ?? `HTTP ${status} ${code}`;
+	if (typeof body.field === 'string') msg += ` (${body.field})`;
 	return code === 'busy' && body.state ? `${msg} (${body.state})` : msg;
 }
 
@@ -150,6 +164,16 @@ export class DeviceApi {
 
 	syncTime(utcUs = Date.now() * 1000) {
 		return this.json<{ utc_us: number }>('POST', '/api/time', { utc_us: utcUs });
+	}
+
+	/** Served from RAM in any state */
+	getSettings() {
+		return this.json<DeviceSettings>('GET', '/api/settings');
+	}
+
+	/** Any subset of keys; all or nothing. 409 unless idle (NVS write). */
+	setSettings(changes: Partial<DeviceSettings>) {
+		return this.json<DeviceSettings>('POST', '/api/settings', changes);
 	}
 
 	calibration() {

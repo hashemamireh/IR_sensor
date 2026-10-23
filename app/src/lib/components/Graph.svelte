@@ -1,138 +1,313 @@
 <!--
-  One recording vs time. The time axis comes from the actual rate in the header
-  (millihertz); values are mV via the sidecar's calibration table, else raw counts.
+  One or more recordings vs time (overlays, decision E6). The first recording is the
+  main one: its name/tags/notes and facts are shown, and Export… exports it.
+  Time comes from each header's actual rate (millihertz). Values are mV via each
+  sidecar's calibration table only if every trace has one; otherwise all are raw
+  counts. Traces align by start or by first rising edge, plus a manual offset each.
   Zoom and pan: wheel / trackpad, drag, two-finger pinch; double-click resets.
-  uPlot only ever gets the decimated visible window (decimate.ts).
 -->
 <script lang="ts">
+	import { untrack } from 'svelte';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import 'uplot/dist/uPlot.min.css';
-	import { GraphView } from '$lib/graphView';
+	import { firstRisingEdge, midThreshold, traceOffset, type AlignMode } from '$lib/align';
+	import { Summary, valueAt, type Series } from '$lib/decimate';
+	import type { DeviceController } from '$lib/device.svelte';
 	import { duration, errorText, localTime, rate, utcTime } from '$lib/format';
+	import { GraphView, type GraphTrace } from '$lib/graphView';
 	import { durationS, parseIrec, sampleRateHz, type IrecFile } from '$lib/irec';
-	import { usableCalibration, type LocalRecording } from '$lib/recordings';
-	import type { LocalStore } from '$lib/storage';
+	import { allTags, displayName, usableCalibration, type LocalRecording } from '$lib/recordings';
+	import ExportDialog from './ExportDialog.svelte';
+	import RecordingMeta from './RecordingMeta.svelte';
+	import Segmented from './Segmented.svelte';
 
-	let { recording, store }: { recording: LocalRecording; store: LocalStore } = $props();
+	let {
+		recordings,
+		dev,
+		onremove,
+	}: { recordings: LocalRecording[]; dev: DeviceController; onremove: (r: LocalRecording) => void } = $props();
 
-	let file = $state.raw<IrecFile | null>(null);
-	let error = $state<string | null>(null);
+	// Colour-blind-safe (Okabe–Ito based), readable on the dark background
+	const COLORS = ['#56b4e9', '#e69f00', '#2fc49a', '#f0e442', '#cc79a7', '#ff7a45', '#a6a8ff', '#bbbbbb'];
+
+	interface Loaded {
+		file: IrecFile;
+		rateHz: number;
+		durationS: number;
+		/** First rising edge (s) at the min–max midpoint, for edge alignment */
+		edgeS: number | null;
+		/** Built on first use, per unit */
+		summaries: { counts?: Summary; mv?: Summary };
+	}
+
+	// Parsed files by .irec name; kept while the recording stays on the graph
+	let files = $state.raw(new Map<string, Loaded>());
+	let errors = $state<Record<string, string>>({});
 	let useMv = $state(true);
+	let align = $state<AlignMode>('start');
+	const hidden = new SvelteSet<string>();
+	const manualMs = new SvelteMap<string, number>();
 	let host = $state<HTMLDivElement>();
 	let zoom = $state(1);
+	let cursorT = $state<number | null>(null);
 	let view: GraphView | null = null;
+	let built = '';
+	let exporting = $state<[number, number] | null | false>(false);
 
-	const lut = $derived.by(() => {
-		if (!file) return null;
-		const cal = usableCalibration(recording, file.header.attenTenthsDb);
-		return cal ? Float32Array.from(cal.mv) : null;
-	});
-	const inMv = $derived(useMv && !!lut);
+	const main = $derived(recordings[0]);
+	const overlay = $derived(recordings.length > 1);
 
-	// Load whenever the selected recording changes
+	// Load files as recordings are added; drop ones that were removed
 	$effect(() => {
-		const r = recording;
-		let stale = false;
-		file = null;
-		error = null;
-		store
-			.readIrec(r)
-			.then((bytes) => {
-				if (!stale) file = parseIrec(bytes);
-			})
-			.catch((e) => {
-				if (!stale) error = errorText(e);
-			});
+		const wanted = recordings.map((r) => r.file);
+		untrack(() => {
+			const kept = new Map([...files].filter(([f]) => wanted.includes(f)));
+			if (kept.size !== files.size) files = kept;
+		});
+		for (const r of recordings) {
+			if (untrack(() => files.has(r.file) || r.file in errors)) continue;
+			dev.local
+				.readIrec(r)
+				.then((bytes) => {
+					const file = parseIrec(bytes);
+					const rateHz = sampleRateHz(file.header);
+					const edgeS = firstRisingEdge(file.samples, rateHz, midThreshold(file.samples));
+					files = new Map(files).set(r.file, { file, rateHz, durationS: durationS(file.header), edgeS, summaries: {} });
+				})
+				.catch((e) => (errors = { ...errors, [r.file]: errorText(e) }));
+		}
+	});
+
+	const luts = $derived(
+		new Map(
+			recordings.map((r) => {
+				const l = files.get(r.file);
+				const cal = l && usableCalibration(r, l.file.header.attenTenthsDb);
+				return [r.file, cal ? Float32Array.from(cal.mv) : null] as const;
+			}),
+		),
+	);
+	const ready = $derived(recordings.length > 0 && recordings.every((r) => files.has(r.file)));
+	const canMv = $derived(ready && recordings.every((r) => luts.get(r.file)));
+	const inMv = $derived(useMv && canMv);
+	const unit = $derived(inMv ? 'mV' : 'ADC counts');
+
+	function series(r: LocalRecording): Series {
+		const l = files.get(r.file)!;
+		const lut = inMv ? luts.get(r.file)! : null;
+		const k = inMv ? 'mv' : 'counts';
+		l.summaries[k] ??= new Summary(l.file.samples, lut);
+		return { samples: l.file.samples, rateHz: l.rateHz, lut, summary: l.summaries[k] };
+	}
+
+	const offsetOf = (r: LocalRecording) => traceOffset(align, files.get(r.file)?.edgeS ?? null, manualMs.get(r.file) ?? 0);
+
+	function traces(): GraphTrace[] {
+		return recordings.map((r, i) => ({
+			series: series(r),
+			offsetS: offsetOf(r),
+			durationS: files.get(r.file)!.durationS,
+			visible: !hidden.has(r.file),
+			color: COLORS[i % COLORS.length],
+		}));
+	}
+
+	// Which files are plotted, in which unit. A string, so edits that only give the
+	// recordings new object identities (e.g. saving a note) don't rebuild the plot.
+	const signature = $derived(ready ? recordings.map((r) => r.file).join('|') + unit : '');
+
+	// (Re)build the plot when the set of traces or the unit changes
+	$effect(() => {
+		if (!signature || !host) return;
+		const el = host;
+		const g = untrack(() => new GraphView(el, traces(), unit, (z) => (zoom = z), (t) => (cursorT = t)));
+		view = g;
+		built = signature;
 		return () => {
-			stale = true;
+			g.destroy();
+			if (view === g) view = null;
 		};
 	});
 
-	// (Re)build the plot when the data or the unit changes
+	// Offsets / visibility change the same plot; a new alignment shows everything
+	let lastAlign: AlignMode = 'start';
 	$effect(() => {
-		if (!file || !host) return;
-		const g = new GraphView(
-			host,
-			{ samples: file.samples, rateHz: sampleRateHz(file.header), lut: inMv ? lut : null },
-			durationS(file.header),
-			inMv ? 'mV' : 'ADC counts',
-			(z) => (zoom = z),
-		);
-		view = g;
-		return () => g.destroy();
+		if (!signature) return;
+		const next = traces(); // tracks align, hidden, manualMs
+		untrack(() => {
+			if (!view || built !== signature) return;
+			view.update(next, align !== lastAlign);
+			lastAlign = align;
+		});
 	});
-	const h = $derived(file?.header);
+
+	function nudge(r: LocalRecording, ms: number) {
+		manualMs.set(r.file, Math.round(((manualMs.get(r.file) ?? 0) + ms) * 1000) / 1000);
+	}
+
+	function toggle(r: LocalRecording) {
+		if (hidden.has(r.file)) hidden.delete(r.file);
+		else hidden.add(r.file);
+	}
+
+	/** The main recording's part of the visible window, in its own time, for export */
+	function exportWindow(): [number, number] | null {
+		const w = view?.window;
+		const l = files.get(main.file);
+		if (!w || !l) return null;
+		const off = offsetOf(main);
+		const a = Math.max(0, w[0] - off), b = Math.min(l.durationS, w[1] - off);
+		return b > a ? [a, b] : null;
+	}
+
+	function fmtValue(v: number | null) {
+		if (v === null) return '—';
+		return inMv ? `${v.toFixed(1)} mV` : `${v}`;
+	}
+
+	const mainLoaded = $derived(files.get(main?.file ?? ''));
+	const h = $derived(mainLoaded?.file.header);
+	const overruns = $derived(recordings.filter((r) => files.get(r.file)?.file.header.overrun));
+	const corrupt = $derived(recordings.filter((r) => files.get(r.file) && !files.get(r.file)!.file.crcOk));
+	const noEdge = $derived(align === 'edge' ? recordings.filter((r) => files.get(r.file) && files.get(r.file)!.edgeS === null) : []);
+	const names = (rs: LocalRecording[]) => rs.map((r) => displayName(r)).join(', ');
 </script>
 
 <div class="graph">
 	<div class="info">
-		<div class="title">
-			<strong>#{recording.id}</strong>
-			<span title={utcTime(recording.start_utc_us)}>{localTime(recording.start_utc_us)}</span>
-			<span class="muted">{recording.device_ssid}</span>
+		<div class="meta">
+			<RecordingMeta recording={main} suggestions={allTags(dev.locals)} onsave={(p) => dev.updateMeta(main, p)} />
 		</div>
+		<div class="tools">
+			{#if canMv}
+				<div class="units" role="radiogroup" aria-label="Units">
+					<button class:on={useMv} onclick={() => (useMv = true)}>mV</button>
+					<button class:on={!useMv} onclick={() => (useMv = false)}>Counts</button>
+				</div>
+			{/if}
+			<button onclick={() => view?.reset()} disabled={zoom <= 1.0001}>Reset zoom</button>
+			<button disabled={!mainLoaded} onclick={() => (exporting = exportWindow())}>Export…</button>
+		</div>
+	</div>
+	<div class="facts muted">
+		<span title={utcTime(main.start_utc_us)}>{localTime(main.start_utc_us)}</span> · #{main.id} · {main.device_ssid}
 		{#if h}
-			<div class="facts muted">
-				{duration(durationS(h) * 1000)} · {rate(h.sampleRateMhz)} · {h.sampleCount.toLocaleString()} samples ·
-				{h.attenTenthsDb / 10} dB{h.compressed ? ' · compressed' : ''}
-			</div>
+			· {duration(durationS(h) * 1000)} · {rate(h.sampleRateMhz)} · {h.sampleCount.toLocaleString()} samples ·
+			{h.attenTenthsDb / 10} dB{h.compressed ? ' · compressed' : ''}
 		{/if}
-		<span class="spacer"></span>
-		{#if lut}
-			<div class="units" role="radiogroup" aria-label="Units">
-				<button class:on={useMv} onclick={() => (useMv = true)}>mV</button>
-				<button class:on={!useMv} onclick={() => (useMv = false)}>Counts</button>
-			</div>
-		{/if}
-		<button onclick={() => view?.reset()} disabled={zoom <= 1.0001}>Reset zoom</button>
 	</div>
 
-	{#if h?.overrun}
-		<p class="banner warn">
-			<strong>Overrun:</strong> samples were lost during this recording, so times within it can't be trusted.
-		</p>
-	{/if}
-	{#if file && !file.crcOk}
-		<p class="banner danger"><strong>CRC check failed:</strong> this file is corrupt; the data shown may be wrong.</p>
-	{/if}
-	{#if file && !lut}
-		<p class="banner">
-			{recording.calibration
-				? "The calibration table doesn't match this file's ADC attenuation, so raw ADC counts are shown."
-				: 'No calibration table for this recording (the chip has no eFuse calibration), so raw ADC counts are shown.'}
-		</p>
-	{/if}
-	{#if error}
-		<p class="banner danger">Couldn't open this recording: {error}</p>
+	{#if overlay}
+		<div class="align">
+			<span class="muted">Align</span>
+			<Segmented label="Align" bind:value={align} options={[
+				{ value: 'start', label: 'By start' },
+				{ value: 'edge', label: 'By first edge' },
+			]} />
+		</div>
 	{/if}
 
+	{#if overruns.length}
+		<p class="banner warn">
+			<strong>Overrun{overlay ? ` in ${names(overruns)}` : ''}:</strong> samples were lost during
+			{overruns.length > 1 ? 'these recordings' : 'this recording'}, so times within {overruns.length > 1 ? 'them' : 'it'} can't be trusted.
+		</p>
+	{/if}
+	{#if corrupt.length}
+		<p class="banner danger">
+			<strong>CRC check failed{overlay ? ` for ${names(corrupt)}` : ''}:</strong> the data shown may be wrong.
+		</p>
+	{/if}
+	{#if ready && !canMv}
+		<p class="banner">
+			{#if overlay}
+				Not every recording here has a matching calibration table, so all are shown in raw ADC counts.
+			{:else if main.calibration}
+				The calibration table doesn't match this file's ADC attenuation, so raw ADC counts are shown.
+			{:else}
+				No calibration table for this recording (the chip has no eFuse calibration), so raw ADC counts are shown.
+			{/if}
+		</p>
+	{/if}
+	{#if noEdge.length}
+		<p class="banner">No rising edge found in {names(noEdge)}; aligned by start instead.</p>
+	{/if}
+	{#each recordings.filter((r) => errors[r.file]) as r (r.file)}
+		<p class="banner danger">Couldn't open {displayName(r)}: {errors[r.file]}</p>
+	{/each}
+
 	<div class="plot" bind:this={host}></div>
-	<p class="muted help">Scroll or pinch to zoom · drag to pan · double-click to reset{zoom > 1.0001 ? ` · ${zoom < 100 ? zoom.toFixed(1) : Math.round(zoom)}×` : ''}</p>
+
+	<div class="legend">
+		<span class="t muted">{cursorT === null ? 'Time —' : `t = ${cursorT.toFixed(4)} s`}</span>
+		{#each recordings as r, i (r.file)}
+			{@const l = files.get(r.file)}
+			{@const off = manualMs.get(r.file) ?? 0}
+			<div class="trace" class:off={hidden.has(r.file)}>
+				<button class="swatch" style="--c: {COLORS[i % COLORS.length]}" aria-pressed={!hidden.has(r.file)}
+					title={hidden.has(r.file) ? 'Show' : 'Hide'} onclick={() => toggle(r)}>
+					<span class="dot"></span>
+					<span class="name">{displayName(r)}</span>
+					{#if l?.file.header.overrun}<span class="badge warn">overrun</span>{/if}
+				</button>
+				<span class="value">
+					{l && cursorT !== null && !hidden.has(r.file) ? fmtValue(valueAt(series(r), cursorT - offsetOf(r))) : ''}
+				</span>
+				{#if overlay}
+					<span class="offset" title="Manual time offset">
+						<button aria-label="Shift earlier by 1 ms" onclick={() => nudge(r, -1)}>−</button>
+						<input type="number" step="0.1" value={off} aria-label="Offset (ms) for {displayName(r)}"
+							onchange={(e) => manualMs.set(r.file, Number((e.currentTarget as HTMLInputElement).value) || 0)} />
+						<span class="muted">ms</span>
+						<button aria-label="Shift later by 1 ms" onclick={() => nudge(r, 1)}>+</button>
+					</span>
+					<button class="remove" aria-label="Remove {displayName(r)} from the graph" onclick={() => onremove(r)}>✕</button>
+				{/if}
+			</div>
+		{/each}
+	</div>
+
+	{#if exporting !== false && mainLoaded}
+		<ExportDialog
+			recording={main}
+			file={mainLoaded.file}
+			lut={luts.get(main.file) ?? null}
+			window={exporting}
+			dataDir={dev.local.root}
+			onclose={() => (exporting = false)}
+		/>
+	{/if}
+
+	<p class="muted help">
+		Scroll or pinch to zoom · drag to pan · double-click to reset{zoom > 1.0001 ? ` · ${zoom < 100 ? zoom.toFixed(1) : Math.round(zoom)}×` : ''}
+	</p>
 </div>
 
 <style>
 	.graph {
 		display: flex;
 		flex-direction: column;
-		gap: 10px;
+		gap: 8px;
 		height: 100%;
 		min-height: 0;
 	}
 	.info {
 		display: flex;
-		align-items: center;
+		align-items: flex-start;
 		gap: 12px 16px;
-		flex-wrap: wrap;
 	}
-	.title {
+	.meta {
+		flex: 1;
+		min-width: 0;
+	}
+	.tools {
 		display: flex;
-		gap: 10px;
-		font-size: 16px;
+		gap: 8px;
+		flex-wrap: wrap;
+		justify-content: flex-end;
 	}
 	.facts {
 		font-size: 13px;
-	}
-	.spacer {
-		flex: 1;
 	}
 	.units {
 		display: flex;
@@ -151,10 +326,83 @@
 		background: color-mix(in srgb, var(--accent) 22%, var(--panel-2));
 		border-color: var(--accent);
 	}
+	.align {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
 	.plot {
 		flex: 1;
 		min-height: 200px;
 		overflow: hidden;
+	}
+	.legend {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px 14px;
+		align-items: center;
+		font-size: 13px;
+	}
+	.t {
+		font-variant-numeric: tabular-nums;
+		min-width: 120px;
+	}
+	.trace {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding-right: 4px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--panel-2);
+	}
+	.trace.off {
+		opacity: 0.5;
+	}
+	.trace button {
+		min-height: 36px;
+		padding: 0 8px;
+		border: none;
+		background: none;
+	}
+	.swatch {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.dot {
+		width: 12px;
+		height: 12px;
+		border-radius: 3px;
+		background: var(--c);
+	}
+	.trace.off .dot {
+		background: none;
+		border: 2px solid var(--c);
+	}
+	.name {
+		max-width: 160px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.value {
+		font-variant-numeric: tabular-nums;
+		min-width: 70px;
+	}
+	.offset {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+	}
+	.offset input {
+		width: 72px;
+		min-height: 32px;
+		padding: 0 6px;
+		text-align: right;
+	}
+	.remove {
+		color: var(--muted);
 	}
 	.help {
 		margin: 0;
@@ -163,11 +411,6 @@
 	}
 	p.banner {
 		margin: 0;
-	}
-	/* uPlot in the dark theme */
-	.plot :global(.u-legend) {
-		color: var(--text);
-		font-size: 13px;
 	}
 	.plot :global(.u-over) {
 		cursor: grab;
