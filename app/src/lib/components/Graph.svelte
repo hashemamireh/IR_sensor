@@ -194,7 +194,7 @@
 					if (!exportPanel?.busy()) exporting = false;
 				}}
 				align="right"
-				width={440}
+				width={540}
 				label="Export"
 			>
 				{#snippet trigger()}
