@@ -182,10 +182,10 @@
 		</div>
 		<div class="tools">
 			{#if canMv}
-				<div class="units" role="radiogroup" aria-label="Units">
-					<button class:on={useMv} onclick={() => (useMv = true)}>mV</button>
-					<button class:on={!useMv} onclick={() => (useMv = false)}>Counts</button>
-				</div>
+				<Segmented label="Units" fill={false} bind:value={useMv} options={[
+					{ value: true, label: 'mV' },
+					{ value: false, label: 'Counts' },
+				]} />
 			{/if}
 			<button onclick={() => view?.reset()} disabled={zoom <= 1.0001}>Reset zoom</button>
 			<Popover
@@ -229,7 +229,7 @@
 	{#if overlay}
 		<div class="align">
 			<span class="muted">Align</span>
-			<Segmented label="Align" bind:value={align} options={[
+			<Segmented label="Align" fill={false} bind:value={align} options={[
 				{ value: 'start', label: 'By start' },
 				{ value: 'edge', label: 'By first edge' },
 			]} />
@@ -327,23 +327,6 @@
 	}
 	.facts {
 		font-size: 13px;
-	}
-	.units {
-		display: flex;
-	}
-	.units button {
-		border-radius: 0;
-	}
-	.units button:first-child {
-		border-radius: var(--radius) 0 0 var(--radius);
-	}
-	.units button:last-child {
-		border-radius: 0 var(--radius) var(--radius) 0;
-		border-left: none;
-	}
-	.units button.on {
-		background: color-mix(in srgb, var(--accent) 22%, var(--panel-2));
-		border-color: var(--accent);
 	}
 	.align {
 		display: flex;

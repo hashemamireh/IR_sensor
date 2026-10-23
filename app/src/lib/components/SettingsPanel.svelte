@@ -1,10 +1,10 @@
-<!-- Device settings (GET/POST /api/settings). Reading works in any state; saving
-     only while idle — the device writes them to flash (decision E4: no queueing). -->
+<!-- Device settings (GET/POST /api/settings), shown in a Popover from the status bar.
+     Reading works in any state; saving only while idle — the device writes them to
+     flash (decision E4: no queueing). -->
 <script lang="ts">
 	import { SAMPLE_RATES_HZ, type DeviceSettings } from '$lib/api';
 	import type { DeviceController } from '$lib/device.svelte';
 	import { errorText } from '$lib/format';
-	import Dialog from './Dialog.svelte';
 	import Segmented from './Segmented.svelte';
 
 	let { dev, onclose }: { dev: DeviceController; onclose: () => void } = $props();
@@ -49,7 +49,7 @@
 	}
 </script>
 
-<Dialog title="Device settings — {dev.ssid ?? 'device'}" onclose={onclose}>
+<h3>Device Settings <span class="muted">{dev.ssid ?? ''}</span></h3>
 	{#if draft}
 		<span class="label">Screen brightness</span>
 		<Segmented label="Screen brightness" bind:value={draft.brightness} options={[
@@ -94,16 +94,29 @@
 		<p class="banner danger small">{error}</p>
 	{/if}
 
-	{#snippet actions()}
-		{#if !draft && error}<button onclick={load}>Try again</button>{/if}
-		<button onclick={onclose}>{dirty ? 'Cancel' : 'Close'}</button>
-		<button class="primary" disabled={!dirty || saving || !dev.idle} onclick={save}>
-			{saving ? 'Saving…' : 'Save'}
-		</button>
-	{/snippet}
-</Dialog>
+<div class="actions">
+	{#if !draft && error}<button onclick={load}>Try again</button>{/if}
+	<button onclick={onclose}>{dirty ? 'Cancel' : 'Close'}</button>
+	<button class="primary" disabled={!dirty || saving || !dev.idle} onclick={save}>
+		{saving ? 'Saving…' : 'Save'}
+	</button>
+</div>
 
 <style>
+	h3 {
+		margin: 0;
+		font-size: 16px;
+	}
+	h3 .muted {
+		font-weight: normal;
+		font-size: 13px;
+		margin-left: 6px;
+	}
+	.actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 10px;
+	}
 	.label {
 		font-size: 13px;
 		color: var(--muted);

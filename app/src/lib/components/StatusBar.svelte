@@ -3,7 +3,7 @@
 	import { bytes } from '$lib/format';
 	import Popover from './Popover.svelte';
 	import RecordPanel from './RecordPanel.svelte';
-	import SettingsDialog from './SettingsDialog.svelte';
+	import SettingsPanel from './SettingsPanel.svelte';
 
 	let { dev }: { dev: DeviceController } = $props();
 
@@ -55,7 +55,7 @@
 
 	<span class="spacer"></span>
 
-	<Popover open={recordOpen} onclose={() => (recordOpen = false)} align="right" width={470} label="Record">
+	<Popover open={recordOpen} onclose={() => (recordOpen = false)} align="right" width={540} label="Record">
 		{#snippet trigger()}
 			<button
 				class="rec"
@@ -77,7 +77,14 @@
 		<RecordPanel {dev} />
 	</Popover>
 
-	<button disabled={!dev.online} onclick={() => (settingsOpen = true)} title="Device settings">Settings</button>
+	<Popover open={settingsOpen} onclose={() => (settingsOpen = false)} align="right" width={440} label="Device Settings">
+		{#snippet trigger()}
+			<button disabled={!dev.online} aria-expanded={settingsOpen} onclick={() => (settingsOpen = !settingsOpen)}>
+				Device Settings
+			</button>
+		{/snippet}
+		<SettingsPanel {dev} onclose={() => (settingsOpen = false)} />
+	</Popover>
 
 	<Popover open={open} onclose={() => (open = false)} align="right" width={340} label="Device">
 		{#snippet trigger()}
@@ -102,9 +109,6 @@
 	</Popover>
 </header>
 
-{#if settingsOpen}
-	<SettingsDialog {dev} onclose={() => (settingsOpen = false)} />
-{/if}
 
 <style>
 	header {

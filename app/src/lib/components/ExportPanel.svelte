@@ -110,9 +110,9 @@
 		{ value: 'window', label: 'Visible window', disabled: !view },
 	]} />
 
-	<span class="label">Resolution</span>
+	<span class="label">Resolution <span class="muted">(full = {fmtRate(file.header.sampleRateMhz)})</span></span>
 	<Segmented label="Resolution" bind:value={factor} disabled={progress !== null} options={[
-		{ value: 1, label: `Full (${fmtRate(file.header.sampleRateMhz)})` },
+		{ value: 1, label: 'Full' },
 		...choices.map((c) => ({ value: c.factor, label: c.label })),
 	]} />
 
