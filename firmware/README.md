@@ -210,7 +210,7 @@ Recording constants live in [`lib/irsensor_core/recording.h`](lib/irsensor_core/
 | `recording::MAX_DURATION_S` | 300 | Cap at 1–10 kHz (≈ 6 MB at 10 kHz) |
 | `recording::MAX_DURATION_20KHZ_S` | 120 | Cap at 20 kHz (PSRAM budget) |
 | `ADC_POOL_BYTES` (`config.h`) | 16 KB | DMA result pool — ~200 ms at 20 kHz; raise if recordings report overrun |
-| `OLED_FLIP` (`config.h`) | false | Rotate the display 180° |
+| `OLED_FLIP` (`config.h`) | true | Rotate the display 180° — on by default, since esp_lcd's SSD1306 orientation is the reverse of the usual one |
 | `ENCODER_COUNTS_PER_DETENT` / `ENCODER_DIRECTION` (`config.h`) | 4 / 1 | Encoder tuning — adjust if one click moves more/less than one item, or the wrong way |
 | `settings::Settings::default_duration_s` | 30 | Default recording length |
 

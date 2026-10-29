@@ -88,7 +88,9 @@ I (...) irsensor: === All subsystems initialized ===
 
 - [ ] On first boot the OLED shows the **WiFi** screen with SSID and password (matching the log).
   Press to dismiss → home screen ("Ready", "0 recordings", "Press for menu").
-- [ ] Text reads the right way up. If it's upside down, set `OLED_FLIP = true` in `include/config.h`.
+- [ ] With the yellow strip at the top, text reads the right way up and the status bar sits in
+  the yellow strip. If instead the image is upside down (or the status bar is in the blue part
+  while the yellow strip is at the bottom), toggle `OLED_FLIP` in `include/config.h`.
 - [ ] Status bar shows a battery reading after ~1 s (`--` before that), free space (~29 MB) and `AP`.
 - [ ] One encoder click moves exactly one menu item. If it moves two or needs two clicks, change
   `ENCODER_COUNTS_PER_DETENT` (try 2). If clockwise moves *up*, set `ENCODER_DIRECTION = -1`.

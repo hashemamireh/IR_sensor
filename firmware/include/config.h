@@ -31,7 +31,11 @@ static constexpr uint32_t BATTERY_READ_INTERVAL_MS = 30000;  // 30 seconds
 
 // --- Display & input — check on hardware ---
 static constexpr int      OLED_HEIGHT = 64;
-static constexpr bool     OLED_FLIP   = false;  // rotate 180° if the module is mounted upside down
+// esp_lcd's SSD1306 driver scans the panel the opposite way to the usual convention
+// (Adafruit, U8g2), which shows the image rotated 180° with the status bar outside the
+// yellow strip. Flipping restores the usual orientation: header pins and yellow strip on
+// top. Set false only for a module that comes out upside down with this on.
+static constexpr bool     OLED_FLIP   = true;
 static constexpr int      ENCODER_COUNTS_PER_DETENT = 4;  // KY-040: one full quadrature cycle per click
 static constexpr int      ENCODER_DIRECTION = 1;          // -1 if clockwise moves up the menu
 static constexpr uint32_t UI_TICK_MS = 10;
