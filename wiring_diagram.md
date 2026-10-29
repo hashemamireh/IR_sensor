@@ -13,7 +13,7 @@
 | **OPT101** | VCC | 3V3 | Left Pin 1 | Power | 3.3V supply per overview §3.1 |
 | **OPT101** | GND | GND | Left Pin 15 | Ground | — |
 | **OPT101** | OUT | GPIO4 | Right Pin 8 | ADC1_CH3 | Clean ADC pin, no strapping conflicts |
-| **OLED** | VCC | 3V3 | Left Pin 1 | Power | 3.3V regulated supply |
+| **OLED** | VCC | 5V | Left Pin 14 | Power | Module has its own 3.3V regulator; frees a 3V3 slot (see below) |
 | **OLED** | GND | GND | Left Pin 15 | Ground | — |
 | **OLED** | SDA | GPIO23 | Right Pin 5 | I2C SDA (via GPIO Matrix) | Safe GP pin, no conflicts |
 | **OLED** | SCL | GPIO24 | Right Pin 4 | I2C SCL (via GPIO Matrix) | Safe GP pin, no conflicts |
@@ -32,6 +32,25 @@
 > **Note:** The OPT101 board's other pins (1M, -V, COM) are left unconnected. With pins 1
 > and 8 shorted internally on the board, the internal 1 MΩ feedback resistor is engaged,
 > giving 14 kHz bandwidth — sufficient for our 10 kHz sampling.
+
+---
+
+## Power Distribution
+
+The board has a single 3V3 pin, so the supplies are split across three rails:
+
+| Rail | Header Position | Feeds | How |
+|:---|:---|:---|:---|
+| 3V3 | Left Pin 1 | OPT101 VCC, Encoder +, MAX17043 VCC | Three-way DuPont splitter |
+| 5V | Left Pin 14 | OLED VCC | Direct wire |
+| VBAT | Left Pin 16 | MAX17043 CELL | Direct wire |
+
+The 5V pin carries USB VBUS (≈ 5 V) when plugged in and the battery voltage when unplugged
+(measured 3.9 V on battery), so it stays live on battery.
+
+> **MAX17043 module:** some breakouts (older SparkFun-style boards and their AliExpress clones)
+> tie VCC to the battery `+` pin on the PCB. Cut that link so VCC comes from 3V3 and CELL from
+> VBAT, as wired here.
 
 ---
 
@@ -55,7 +74,7 @@
    ENC DT  Pin 11 │  GPIO10           GPIO28 │  Pin 11
            Pin 12 │  GPIO26           GND    │  Pin 12
            Pin 13 │  GPIO25           GPIO14 │  Pin 13    (USB D+)
-           Pin 14 │  5V               GPIO13 │  Pin 14    (USB D-)
+    5V ─── Pin 14 │  5V               GPIO13 │  Pin 14    (USB D-)
    GND ─── Pin 15 │  GND              GND    │  Pin 15
   VBAT ─── Pin 16 │  VBAT             VBAT   │  Pin 16
                   │  (USB connectors / bot)  │
@@ -65,7 +84,7 @@
   │  OPT101   │       │ I2C OLED │       │  KY-040      │
   │  Board    │       │ 128x64   │       │  Rotary Enc  │
   ├───────────┤       ├──────────┤       ├──────────────┤
-  │ VCC ──────┼─ 3V3  │ VCC ─────┼─ 3V3  │ +   ─────────┼─ 3V3
+  │ VCC ──────┼─ 3V3  │ VCC ─────┼─ 5V   │ +   ─────────┼─ 3V3
   │ GND ──────┼─ GND  │ GND ─────┼─ GND  │ GND ─────────┼─ GND
   │ OUT ──────┼─ GP4  │ SDA ─────┼─ GP23 │ CLK ─────────┼─ GP8
   │ 1M   (NC) │       │ SCL ─────┼─ GP24 │ DT  ─────────┼─ GP10
@@ -77,7 +96,7 @@
               │ Fuel Gauge (I2C) │
               │ Addr: 0x36       │
               ├──────────────────┤
-              │ VCC ─────────────┼─ 3V3  (Left Pin 1)
+              │ VCC ─────────────┼─ 3V3  (Left Pin 1; VCC–+ link cut on module)
               │ GND ─────────────┼─ GND  (Left Pin 15)
               │ CELL ────────────┼─ VBAT (Left Pin 16)
               │ SDA ─────────────┼─ GP23 (shared with OLED)
@@ -116,13 +135,31 @@
 - **Why not GPIO2/GPIO3 (dedicated LP_I2C)?** GPIO2 is a strapping pin + JTAG MTMS, GPIO3 is
   JTAG MTDI. External pull-ups on strapping pins during boot can cause issues. The OLED doesn't
   need LP core access (it's frozen/off during deep sleep), so there's no benefit to using LP_I2C.
-- **Why not VBAT?** VBAT ranges from 3.0–4.2V. At full charge, the OLED module's onboard I2C
-  pull-ups would pull SDA/SCL to 4.2V, exceeding the ESP32-C5's absolute maximum GPIO input
-  voltage (~3.6V) and risking damage. The 3V3 regulated rail matches logic levels and is safe.
 
-> **Note:** The I2C OLED module typically has built-in pull-up resistors (4.7 kΩ or 10 kΩ to
-> VCC). Verify your specific module has them. If not, add external **4.7 kΩ pull-ups** from
-> SDA and SCL to 3V3.
+### OLED Power → 5V Pin
+
+- The board has only one 3V3 pin, and moving the OLED off it lets one three-way splitter cover
+  the remaining three peripherals.
+- This is safe **only because of how this particular module is built**:
+  - It has its own 3.3V LDO (3-pin SOT-23), so the SSD1306 never sees 5V.
+  - Its SDA/SCL pull-ups (4.7 kΩ) go to the LDO's **3.3V output**, not to raw VCC. So the I2C
+    bus stays at 3.3V even with 5V on VCC.
+- Verified with a multimeter: ≈ 4.7 kΩ from SDA/SCL to the LDO output, ≈ 4 MΩ (open) to VCC;
+  powered alone from the 5V pin on USB, SDA and SCL both read ≈ 3.3V.
+- On battery the 5V pin carries ~VBAT (3.0–4.2V); after the LDO's dropout the OLED gets
+  ≈ 2.8–3.3V, enough for the display.
+- **Why not the other peripherals on 5V?** On USB the pin is ≈ 5V:
+  - KY-040's pull-ups go to `+`, so CLK/DT/SW would put 5V on the GPIOs.
+  - OPT101's output could swing to ~3.85V, above the ADC range and GPIO limit.
+  - MAX17043's VDD is rated 2.5–4.5V.
+
+> **Warning:** If the OLED module is ever replaced, re-check both points above before wiring
+> it to 5V. Many modules tie the pull-ups to raw VCC (5V on the GPIOs) or have no regulator at
+> all. If in doubt, power it from 3V3 instead.
+
+> **Note:** The OLED module's built-in pull-ups (4.7 kΩ to its 3.3V regulator output) serve the
+> whole I2C bus. If a replacement module lacks them, add external **4.7 kΩ pull-ups** from SDA
+> and SCL to 3V3.
 
 ### Rotary Encoder → GPIO8 (CLK), GPIO10 (DT), GPIO5 (SW)
 
@@ -147,8 +184,9 @@
   conflict entirely since it uses I2C, not ADC.
 - **CELL pin** connects directly to the VBAT rail (battery positive). The MAX17043 handles the
   full LiPo voltage range (2.5–4.5V) internally — no external voltage divider is needed.
-- **VCC pin** is powered from the 3V3 regulated rail (not VBAT) for stable logic-level I2C
-  communication.
+- **VCC pin** is powered from the 3V3 regulated rail (not VBAT), so any pull-ups on the module
+  sit at 3.3V rather than battery voltage. The module used here ties VCC to `+` on the PCB;
+  that link is cut so the two can be wired separately.
 - The MAX17043's **ModelGauge™** algorithm provides accurate state-of-charge (SoC%) without
   requiring a sense resistor or coulomb counting, and compensates for load and temperature
   variations — significantly more accurate than a voltage-to-percentage lookup table.

@@ -383,12 +383,13 @@ From the **Status Screen** (shown on wake), a **short press** opens the **Main M
   goes straight back to deep sleep. This avoids a separate LP-core (ULP) program at the cost of a
   brief wake on accidental presses.
 - **Power draw**: the ESP32-C5 itself is ≈ 10–30 µA with GPIO wake (the button's internal pull-up
-  keeps the RTC peripheral domain on), but everything on the 3V3 rail stays powered:
+  keeps the RTC peripheral domain on), but everything on the 3V3 and 5V rails stays powered:
   - OPT101: **≈ 120 µA** quiescent (datasheet, dark) — stays on the 3V3 rail by choice: on a
     1000 mAh cell that's still months of standby, and LiPo self-discharge (≈ 2–5 %/month) is in
     the same range. Powering it from a GPIO remains an option if measurements call for it.
   - MAX17043: < 1 µA in sleep mode (§5.3)
-  - OLED in display-off mode: a few µA
+  - OLED in display-off mode: a few µA, plus its own LDO's quiescent current (it's powered from
+    the 5V pin, which carries the battery voltage when unplugged)
   - Board-level parts (regulator quiescent current, any power LED) — **measure on hardware**;
     these may well dominate
 
@@ -821,5 +822,6 @@ IR_sensor/
 | Max recording duration | 300 s (1–10 kHz), 120 s (20 kHz) | Must fit in ~6 MB of reserved PSRAM |
 | ADC calibration | Raw counts in files; device serves raw → mV table via `/api/calibration` | Full resolution; per-chip eFuse calibration only exists on the device |
 | Sample rate in header | Actual (measured) rate, in millihertz | DAQ practice; avoids mislabelling the timebase |
-| OPT101 power | 3.3V from ESP32 rail | Device operates on battery (no 5V available unplugged); output range ~0–2.15 V usable |
+| OPT101 power | 3.3V from ESP32 rail | Stable supply on USB and battery; the 5V pin swings 3.0–5 V and at 5 V the output could exceed the ADC range. Output range ~0–2.15 V usable |
+| OLED power | 5V pin (USB VBUS, or ~VBAT on battery) via the module's own 3.3V LDO | Board has one 3V3 pin; this module's I2C pull-ups go to its LDO output, so the bus stays at 3.3 V (verified with a multimeter) |
 | ADC attenuation | 12 dB (full 0–3.3 V), fixed, recorded per file | Never clips the OPT101's ~2.15 V peak on any chip; the resolution given up doesn't affect timing |

@@ -20,7 +20,9 @@ All commands run from `firmware/`. Helper scripts need only Python 3's standard 
   - Nothing on `N/15` (GPIO15 is PSRAM chip-select on this board).
   - OLED and MAX17043 share SDA = GPIO23 / SCL = GPIO24.
   - Encoder SW on GPIO5 (the deep-sleep wake pin), CLK on GPIO8, DT on GPIO10.
-  - MAX17043 CELL goes to VBAT, not 3V3.
+  - MAX17043 CELL goes to VBAT, not 3V3; its VCC goes to 3V3 (VCC–+ link on the module cut).
+  - OLED VCC goes to the 5V pin (Left Pin 14). Only safe for a module whose SDA/SCL pull-ups go
+    to its own 3.3V regulator — see `wiring_diagram.md` before swapping in a different module.
 - [ ] The I2C bus has external pull-ups (OLED and MAX17043 breakouts usually include 4.7–10 kΩ).
   The ESP32's internal ones (~45 kΩ) are too weak for 400 kHz on their own.
 - [ ] OPT101 board has its bypass capacitor (0.01–0.1 µF on the supply pin) — many breakouts
