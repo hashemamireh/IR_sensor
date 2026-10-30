@@ -1,5 +1,6 @@
 <!-- Single-select segmented control: one joined bar of buttons, the chosen one highlighted.
-     `fill` stretches it to its container with equal segments; off, it sizes to its labels. -->
+     `fill` stretches it to its container with equal segments; off, it sizes to its labels.
+     A filled one too narrow for its options (phones) becomes a grid of separate buttons. -->
 <script lang="ts" generics="T">
 	interface Option {
 		value: T;
@@ -13,9 +14,14 @@
 		fill = true,
 		label,
 	}: { options: Option[]; value: T; disabled?: boolean; fill?: boolean; label: string } = $props();
+
+	/** Narrowest a filled segment may get before the bar wraps into a grid */
+	const MIN_SEGMENT_PX = 64;
+	let width = $state(0);
+	const wrap = $derived(fill && width > 0 && width < options.length * MIN_SEGMENT_PX);
 </script>
 
-<div class="seg" class:fill role="radiogroup" aria-label={label}>
+<div class="seg" class:fill class:wrap role="radiogroup" aria-label={label} bind:clientWidth={width}>
 	{#each options as o (o.label)}
 		<button
 			type="button"
@@ -56,6 +62,17 @@
 		border-radius: 0 var(--radius) var(--radius) 0;
 	}
 	button:only-child {
+		border-radius: var(--radius);
+	}
+	.wrap {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
+		gap: 6px;
+	}
+	.wrap button,
+	.wrap button:first-child,
+	.wrap button:last-child {
+		margin-left: 0;
 		border-radius: var(--radius);
 	}
 	/* Raise the hovered / chosen segment so its whole border shows */

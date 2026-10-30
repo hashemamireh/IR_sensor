@@ -3,9 +3,12 @@
   Closes on a click outside or Escape (via `onclose`, so the owner can refuse,
   e.g. while an export is running). `align` picks which edge of the button the
   panel lines up with; use "right" near the right side of the screen.
+  On phones it's a bottom sheet instead: full width along the bottom edge, over a
+  dimmed screen that closes it when tapped.
 -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { screen } from '$lib/layout.svelte';
 
 	let {
 		open,
@@ -27,6 +30,7 @@
 
 	let anchor: HTMLDivElement;
 	let anchorWidth = $state(0);
+	const sheet = $derived(screen.phone);
 
 	$effect(() => {
 		if (!open) return;
@@ -49,7 +53,16 @@
 
 <div class="anchor" bind:this={anchor} bind:clientWidth={anchorWidth}>
 	{@render trigger()}
-	{#if open}
+	{#if open && sheet}
+		<!-- Inside the anchor, so the outside-click handler ignores it: closes on its own
+		     click (not pointerdown, which would let the click land on what's beneath).
+		     Escape covers keyboards. -->
+		<!-- svelte-ignore a11y_click_events_have_key_events -->
+		<div class="scrim" role="presentation" onclick={onclose}></div>
+		<div class="pop sheet" role="dialog" aria-label={label}>
+			<div class="body">{@render children()}</div>
+		</div>
+	{:else if open}
 		<div
 			class="pop {align}"
 			role="dialog"
@@ -86,11 +99,30 @@
 	.pop.left {
 		left: 0;
 	}
+	.pop.sheet {
+		position: fixed;
+		top: auto;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		border-bottom: none;
+		border-radius: 16px 16px 0 0;
+	}
+	.sheet .body {
+		max-height: 85vh;
+		padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+	}
+	.scrim {
+		position: fixed;
+		inset: 0;
+		z-index: 19;
+		background: rgb(0 0 0 / 0.5);
+	}
 	.pop.right {
 		right: 0;
 	}
 	/* The arrow: a rotated square sharing the panel's border, centred on the button */
-	.pop::before {
+	.pop:not(.sheet)::before {
 		content: '';
 		position: absolute;
 		top: -8px;

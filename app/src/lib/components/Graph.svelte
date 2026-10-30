@@ -15,6 +15,7 @@
 	import type { DeviceController } from '$lib/device.svelte';
 	import { duration, errorText, localTime, rate, utcTime } from '$lib/format';
 	import { GraphView, type GraphTrace } from '$lib/graphView';
+	import { screen } from '$lib/layout.svelte';
 	import { durationS, parseIrec, sampleRateHz, type IrecFile } from '$lib/irec';
 	import { allTags, displayName, usableCalibration, type LocalRecording } from '$lib/recordings';
 	import ExportPanel from './ExportPanel.svelte';
@@ -57,6 +58,9 @@
 	let exportPanel = $state<ExportPanel>();
 
 	const main = $derived(recordings[0]);
+	/** Portrait / phone: name, tags, notes and facts fold away to give the chart room */
+	const compact = $derived(screen.compact);
+	let showDetails = $state(false);
 	const overlay = $derived(recordings.length > 1);
 
 	// Load files as recordings are added; drop ones that were removed
@@ -175,11 +179,22 @@
 	const names = (rs: LocalRecording[]) => rs.map((r) => displayName(r)).join(', ');
 </script>
 
+{#snippet meta()}
+	<div class="meta">
+		<RecordingMeta recording={main} suggestions={allTags(dev.locals)} onsave={(p) => dev.updateMeta(main, p)} />
+	</div>
+{/snippet}
+
 <div class="graph">
-	<div class="info">
-		<div class="meta">
-			<RecordingMeta recording={main} suggestions={allTags(dev.locals)} onsave={(p) => dev.updateMeta(main, p)} />
-		</div>
+	<div class="info" class:compact class:phone={screen.phone}>
+		{#if compact}
+			<button class="toggle" aria-expanded={showDetails} onclick={() => (showDetails = !showDetails)}>
+				<strong class="title">{displayName(main)}</strong>
+				<span class="muted">{showDetails ? 'Hide details' : 'Details'} <span class="chev" class:up={showDetails}>▾</span></span>
+			</button>
+		{:else}
+			{@render meta()}
+		{/if}
 		<div class="tools">
 			{#if canMv}
 				<Segmented label="Units" fill={false} bind:value={useMv} options={[
@@ -187,7 +202,7 @@
 					{ value: false, label: 'Counts' },
 				]} />
 			{/if}
-			<button onclick={() => view?.reset()} disabled={zoom <= 1.0001}>Reset zoom</button>
+			<button onclick={() => view?.reset()} disabled={zoom <= 1.0001}>{screen.phone ? 'Reset' : 'Reset zoom'}</button>
 			<Popover
 				open={exporting !== false && !!mainLoaded}
 				onclose={() => {
@@ -218,6 +233,10 @@
 			</Popover>
 		</div>
 	</div>
+	{#if compact && showDetails}
+		{@render meta()}
+	{/if}
+	{#if !compact || showDetails}
 	<div class="facts muted">
 		<span title={utcTime(main.start_utc_us)}>{localTime(main.start_utc_us)}</span> · #{main.id} · {main.device_ssid}
 		{#if h}
@@ -225,6 +244,7 @@
 			{h.attenTenthsDb / 10} dB{h.compressed ? ' · compressed' : ''}
 		{/if}
 	</div>
+	{/if}
 
 	{#if overlay}
 		<div class="align">
@@ -297,7 +317,7 @@
 	</div>
 
 
-	<p class="muted help">
+	<p class="muted help" class:hide={screen.phone}>
 		Scroll or pinch to zoom · drag to pan · double-click to reset{zoom > 1.0001 ? ` · ${zoom < 100 ? zoom.toFixed(1) : Math.round(zoom)}×` : ''}
 	</p>
 </div>
@@ -318,6 +338,53 @@
 	.meta {
 		flex: 1;
 		min-width: 0;
+	}
+	.info.compact {
+		align-items: center;
+		flex-wrap: wrap;
+	}
+	/* Phones: the tools get their own full row, on one line */
+	.info.phone .tools {
+		flex: 1 1 100%;
+		flex-wrap: nowrap;
+		justify-content: space-between;
+	}
+	.info.phone .tools > :global(*) {
+		flex: none;
+	}
+	.info.phone .tools :global(button) {
+		padding: 0 12px;
+	}
+	.toggle {
+		flex: 1 1 200px;
+		min-width: 0;
+		display: flex;
+		align-items: baseline;
+		gap: 10px;
+		padding: 0;
+		border: none;
+		background: none;
+		text-align: left;
+	}
+	.toggle .title {
+		font-size: 16px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		min-width: 0;
+	}
+	.toggle .muted {
+		flex: none;
+		font-size: 13px;
+	}
+	.chev {
+		display: inline-block;
+	}
+	.chev.up {
+		transform: rotate(180deg);
+	}
+	.help.hide {
+		display: none;
 	}
 	.tools {
 		display: flex;

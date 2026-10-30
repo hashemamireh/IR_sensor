@@ -9,7 +9,15 @@
 		selected = $bindable(),
 		compare = $bindable(),
 		maxTraces,
-	}: { dev: DeviceController; selected: string | null; compare: string[]; maxTraces: number } = $props();
+		onopen,
+	}: {
+		dev: DeviceController;
+		selected: string | null;
+		compare: string[];
+		maxTraces: number;
+		/** A recording was tapped (phones then switch to the graph) */
+		onopen?: () => void;
+	} = $props();
 
 	const allRows = $derived(mergeRecordings(dev.online ? dev.ssid : null, dev.online ? dev.deviceRecordings : null, dev.locals));
 	const onDevice = $derived(allRows.filter((r) => r.device));
@@ -20,6 +28,7 @@
 	function open(key: string) {
 		selected = key;
 		compare = [];
+		onopen?.();
 	}
 
 	/** Compare: add to / remove from the graph's extra traces */

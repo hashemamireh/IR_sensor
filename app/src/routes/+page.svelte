@@ -8,6 +8,7 @@
 	import { errorText } from '$lib/format';
 	import { localKey } from '$lib/recordings';
 	import { inTauri } from '$lib/http';
+	import { screen } from '$lib/layout.svelte';
 	import { LocalStore, startupConfig } from '$lib/storage';
 
 	let dev = $state<DeviceController | null>(null);
@@ -61,10 +62,21 @@
 		if (dev.liveEnded === 'stopped' || dev.liveEnded === 'recording') liveOpen = false;
 	});
 
+	// Phones show one screen at a time: the list, or the graph / live view over it.
+	// `detail` is the graph screen; live view shows whenever it's open.
+	let detail = $state(false);
+	const viewing = $derived(liveOpen || detail);
+
+	function back() {
+		if (liveOpen) liveOpen = false;
+		else detail = false;
+	}
+
 	// A recording started from the app opens once it has downloaded
 	$effect(() => {
 		if (dev?.autoOpen) {
 			selected = dev.autoOpen;
+			detail = true;
 			dev.autoOpen = null;
 		}
 	});
@@ -91,11 +103,20 @@
 			</div>
 		{/if}
 
-		<main>
-			<aside>
-				<RecordingsList {dev} bind:selected bind:compare maxTraces={MAX_TRACES} />
-			</aside>
+		<main class={screen.layout} class:idle={!liveOpen && !shown.length}>
+			{#if !screen.phone || !viewing}
+				<aside>
+					<RecordingsList {dev} bind:selected bind:compare maxTraces={MAX_TRACES} onopen={() => (detail = true)} />
+					{#if screen.phone && compare.length}
+						<button class="primary" onclick={() => (detail = true)}>Show graph · {shown.length} recordings</button>
+					{/if}
+				</aside>
+			{/if}
+			{#if !screen.phone || viewing}
 			<section class="viewer">
+				{#if screen.phone}
+					<button class="back" onclick={back}>‹ Recordings</button>
+				{/if}
 				{#if liveOpen}
 					<LiveView {dev} onclose={() => (liveOpen = false)} />
 				{:else if shown.length}
@@ -107,6 +128,7 @@
 					</div>
 				{/if}
 			</section>
+			{/if}
 		</main>
 	</div>
 {/if}
@@ -116,6 +138,7 @@
 		display: flex;
 		flex-direction: column;
 		height: 100vh;
+		height: 100dvh;
 	}
 	.offline,
 	.notice {
@@ -138,10 +161,53 @@
 		gap: 16px;
 		padding: 16px;
 	}
+	/* Portrait: graph on top, list below; the graph shrinks to its message when
+	   there's nothing to show */
+	main.portrait {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: minmax(0, 3fr) minmax(0, 2fr);
+	}
+	main.portrait.idle {
+		grid-template-rows: auto minmax(0, 1fr);
+	}
+	main.portrait .viewer {
+		order: -1;
+	}
+	/* Details open, or several traces: scroll rather than spill onto the list. Not
+	   in wide, where the Export popover would be clipped by it. */
+	main:not(.wide) .viewer {
+		overflow-y: auto;
+	}
+	main.phone {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: minmax(0, 1fr);
+		padding: 8px;
+	}
+	main.phone .viewer {
+		padding: 10px;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	/* The graph / live view fills what the back button leaves */
+	main.phone .viewer > :global(:last-child) {
+		flex: 1;
+		min-height: 0;
+		height: auto;
+	}
+	.back {
+		align-self: flex-start;
+		flex: none;
+		padding: 0 12px 0 6px;
+		border: none;
+		background: none;
+		color: var(--accent);
+		font-weight: 600;
+	}
 	aside {
 		display: flex;
 		flex-direction: column;
-		gap: 20px;
+		gap: 10px;
 		min-height: 0;
 	}
 	.viewer {

@@ -15,8 +15,8 @@
         "title": "IR Sensor",
         "width": 1280,
         "height": 820,
-        "minWidth": 900,
-        "minHeight": 600,
+        "minWidth": 360,
+        "minHeight": 560,
         "zoomHotkeysEnabled": false
       }
     ],

@@ -281,6 +281,21 @@ record settings.
 - **Allowed during live mode:** manual downloads, deletes and settings. Auto-downloads
   wait until the device is idle, because flash reads can make live mode drop samples.
 
+### Window sizes (`src/lib/layout.svelte.ts`)
+
+The layout follows the window's **width** (not its aspect ratio), so a tablet held
+upright, a narrow desktop window and a phone each get one that fits:
+
+| Width | Layout |
+| :--- | :--- |
+| ≥ 1000 px | List on the left, graph or live view on the right. |
+| 600–999 px | Graph or live view on top, list below. Compact top bar: battery as an icon with %, the state, Live, Record and a gear for the Device menu. The SSID, voltage, free space and "clock not synced" move to the top of the Device menu. A recording's name, tags, notes and facts fold under **Details**. |
+| < 600 px | One screen at a time. The list; tapping a recording opens its graph (**‹ Recordings** goes back). Live view opens full-screen the same way. Live and Record are icon buttons, and the Record, Export and Device panels slide up from the bottom. With recordings added by **+ Compare**, **Show graph** opens them together. |
+
+Widths are CSS pixels: the Surface Go upright at 150 % scaling is about 853 px wide
+(portrait layout). The window can shrink to 360 px wide, so all three can be tried on a
+desktop. Segmented choices that would get too narrow wrap into a grid of buttons.
+
 ### Times
 
 Device times are UTC. The app shows them in local time, with UTC on hover. A
@@ -302,6 +317,7 @@ These can only be checked on the real tablet. Please report back:
 - [ ] Export of a long recording to CSV finishes, and the file opens.
 - [ ] Live view: the strip chart scrolls smoothly and the big reading is readable at arm's length.
 - [ ] The Record, Export and Device popovers open and close comfortably by touch (tap outside closes them).
+- [ ] Held upright, the app switches to graph-on-top and the graph is still usable at that width.
 
 ## Layout
 
@@ -322,6 +338,8 @@ app/
 │   ├── recordSettings.svelte.ts  record rate / duration, shared and remembered
 │   ├── exportFile.ts        Save dialog + streaming the export to disk
 │   ├── format.ts            local time, sizes, rates
+│   ├── layout.svelte.ts     window width → wide / portrait / phone layout
+│   ├── touch.ts             blocks pinch-zoom of the whole app
 │   ├── components/          StatusBar, RecordPanel, RecordingsList, Graph, …
 │   └── fixtures/            IREC test files from the mock
 ├── src/routes/+page.svelte  the single screen

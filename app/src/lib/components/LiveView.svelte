@@ -8,6 +8,7 @@
 	import uPlot from 'uplot';
 	import 'uplot/dist/uPlot.min.css';
 	import type { DeviceController } from '$lib/device.svelte';
+	import { screen } from '$lib/layout.svelte';
 	import { countsToValue } from '$lib/live';
 	import { recordSettings as rs } from '$lib/recordSettings.svelte';
 	import Segmented from './Segmented.svelte';
@@ -135,7 +136,7 @@
 			<span class="recdot"></span> Record {rs.label}
 		</button>
 		{#if dev.live}
-			<button disabled={busy} onclick={() => run(() => dev.stopLive())}>Stop live view</button>
+			<button disabled={busy} onclick={() => run(() => dev.stopLive())}>{screen.phone ? 'Stop' : 'Stop live view'}</button>
 		{:else}
 			<button onclick={onclose}>Close</button>
 		{/if}
@@ -313,6 +314,18 @@
 	@keyframes pulse {
 		50% {
 			opacity: 0.3;
+		}
+	}
+	/* Phones (layout.svelte.ts): smaller numbers so both readings fit one row */
+	@media (max-width: 599.98px) {
+		.readings {
+			gap: 24px;
+		}
+		.big .value {
+			font-size: 42px;
+		}
+		.big.peak .value {
+			font-size: 26px;
 		}
 	}
 </style>
