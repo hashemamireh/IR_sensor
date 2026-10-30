@@ -25,6 +25,7 @@ static constexpr uint32_t COMPRESS_CHUNK_BYTES = 8 * 1024;
 
 // --- Deep sleep (spec §7.1) ---
 static constexpr int64_t  WAKE_HOLD_US = 2000000;     // button hold needed to wake
+static constexpr uint32_t SLEEP_WARNING_S = 10;       // countdown shown before the idle sleep
 
 // --- Battery monitor ---
 static constexpr uint32_t BATTERY_READ_INTERVAL_MS = 30000;  // 30 seconds

@@ -125,6 +125,7 @@ void Menu::rebuild_top() {
 
 void Menu::reset_home() {
     stack_.clear();
+    sleep_warning_ = false;
     push(home_screen());
 }
 
@@ -164,6 +165,10 @@ void Menu::handle(Input in) {
             return;
 
         case Kind::Text:
+            if (sleep_warning_) {  // any input means "stay awake"
+                dismiss_sleep_warning();
+                return;
+            }
             if (in == Input::Left || in == Input::Right) {
                 s.top += (in == Input::Right) ? 1 : -1;
                 clamp_selection(s);
@@ -357,6 +362,27 @@ void Menu::show_wifi_info() {
     push(std::move(s));
 }
 
+void Menu::show_sleep_warning(uint32_t seconds_left) {
+    std::vector<std::string> lines = {fmt("in %u s", u(seconds_left)), "", "Press to stay awake"};
+    if (sleep_warning_) {
+        stack_.back().lines = std::move(lines);
+        dirty_ = true;
+        return;
+    }
+    Screen s;
+    s.kind  = Kind::Text;
+    s.title = "Going to sleep";
+    s.lines = std::move(lines);
+    push(std::move(s));
+    sleep_warning_ = true;
+}
+
+void Menu::dismiss_sleep_warning() {
+    if (!sleep_warning_) return;
+    sleep_warning_ = false;
+    pop();
+}
+
 Menu::Screen Menu::storage_menu() {
     Screen s;
     s.build = [this](Screen& s) {
@@ -420,6 +446,13 @@ Menu::Screen Menu::settings_menu() {
                 for (uint32_t d : settings::DEFAULT_DURATIONS_S) options.push_back({duration_label(d), d});
                 push(choice("Default length", options, cur.default_duration_s, [this](uint32_t v) {
                     update_settings([v](settings::Settings& s) { s.default_duration_s = v; });
+                }));
+            }},
+            {"Sleep after: " + timeout_label(cur.sleep_timeout_s), [this, cur] {
+                std::vector<Option> options;
+                for (uint32_t t : settings::SLEEP_TIMEOUTS_S) options.push_back({timeout_label(t), t});
+                push(choice("Sleep after", options, cur.sleep_timeout_s, [this](uint32_t v) {
+                    update_settings([v](settings::Settings& s) { s.sleep_timeout_s = v; });
                 }));
             }},
         };

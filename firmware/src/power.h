@@ -15,3 +15,8 @@ bool power_deep_sleep();
 
 // For the API: sleeps after `delay_ms`, so the HTTP response goes out first.
 void power_deep_sleep_later(uint32_t delay_ms);
+
+// Idle deep sleep (spec §7.1): the API reports activity here; the UI task
+// adds encoder input and busy states, and runs the countdown.
+void     power_note_activity();
+uint32_t power_last_activity_ms();  // esp_timer milliseconds

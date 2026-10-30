@@ -14,6 +14,7 @@ static constexpr const char* KEY_BRIGHTNESS = "brightness";
 static constexpr const char* KEY_TIMEOUT    = "scr_timeout_s";
 static constexpr const char* KEY_RATE       = "def_rate_hz";
 static constexpr const char* KEY_DURATION   = "def_duration_s";
+static constexpr const char* KEY_SLEEP      = "sleep_timeout_s";
 
 static SemaphoreHandle_t  mutex = nullptr;
 static settings::Settings current;
@@ -30,6 +31,7 @@ void settings_store_init() {
         nvs_get_u32(h, KEY_TIMEOUT,  &s.screen_timeout_s);
         nvs_get_u32(h, KEY_RATE,     &s.default_rate_hz);
         nvs_get_u32(h, KEY_DURATION, &s.default_duration_s);
+        nvs_get_u32(h, KEY_SLEEP,    &s.sleep_timeout_s);
         nvs_close(h);
     }
     if (!settings::is_valid(s)) {
@@ -37,9 +39,10 @@ void settings_store_init() {
         s = settings::Settings{};
     }
     current = s;
-    ESP_LOGI(TAG, "Loaded: brightness=%s timeout=%lus rate=%luHz duration=%lus",
+    ESP_LOGI(TAG, "Loaded: brightness=%s timeout=%lus rate=%luHz duration=%lus sleep=%lus",
              settings::brightness_str(s.brightness), (unsigned long)s.screen_timeout_s,
-             (unsigned long)s.default_rate_hz, (unsigned long)s.default_duration_s);
+             (unsigned long)s.default_rate_hz, (unsigned long)s.default_duration_s,
+             (unsigned long)s.sleep_timeout_s);
 }
 
 settings::Settings settings_get() {
@@ -59,6 +62,7 @@ esp_err_t settings_save(const settings::Settings& s) {
     if (err == ESP_OK) err = nvs_set_u32(h, KEY_TIMEOUT,  s.screen_timeout_s);
     if (err == ESP_OK) err = nvs_set_u32(h, KEY_RATE,     s.default_rate_hz);
     if (err == ESP_OK) err = nvs_set_u32(h, KEY_DURATION, s.default_duration_s);
+    if (err == ESP_OK) err = nvs_set_u32(h, KEY_SLEEP,    s.sleep_timeout_s);
     if (err == ESP_OK) err = nvs_commit(h);
     nvs_close(h);
 

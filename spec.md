@@ -354,14 +354,16 @@ From the **Status Screen** (shown on wake), a **short press** opens the **Main M
 │   ├── Screen Brightness → [Low │ Medium │ High]
 │   ├── Screen Timeout → [30s │ 1 min │ 5 min │ Never]
 │   ├── Default Sample Rate → [1 kHz │ 2 kHz │ 5 kHz │ 10 kHz │ 20 kHz]
-│   └── Default Duration → [5s │ 10s │ 30s │ 60s]
+│   ├── Default Duration → [5s │ 10s │ 30s │ 60s]
+│   └── Sleep After → [5 min │ 15 min │ 30 min │ Never]
 │
 └── 💤 Deep Sleep → [Confirm? Yes / No]
 ```
 
 ### 6.5. Settings Persistence
 
-- User settings (brightness, timeout, default sample rate, default duration) are stored in
+- User settings (brightness, screen timeout, default sample rate, default duration, sleep
+  timeout) are stored in
   **ESP-IDF NVS (Non-Volatile Storage)** — the platform's built-in key-value store.
 - NVS provides power-loss-safe transactional writes and built-in wear leveling, with no need for
   a custom file format or serialization code.
@@ -377,6 +379,16 @@ From the **Status Screen** (shown on wake), a **short press** opens the **Main M
 - **Entry**: Via the device menu ("Deep Sleep" → confirm) or `POST /api/sleep` — only while
   idle. The OLED and LED are turned off and WiFi is stopped first; the firmware waits for the
   button to be released so it doesn't wake straight away.
+- **Idle timeout**: the device also sleeps by itself after **Sleep After** (Settings; 5, 15 or
+  30 min, or Never; default **15 min**) without activity. Awake, the WiFi access point alone
+  draws ~80–120 mA — a full 1000 mAh cell would be flat in ~8–12 h if the device were left on.
+  - **Activity**: encoder turns and presses; any API request **except** `GET /api/status`; and
+    any recording, saving or compressing (the countdown only runs while idle). Status polling
+    alone deliberately doesn't count, so a tablet left open on the app can't keep the device
+    awake indefinitely — the app then shows the device as unreachable, with wake instructions.
+  - **Warning**: for the last 10 s the OLED turns on and shows "Going to sleep in N s — Press to
+    stay awake", and the status LED blinks. Any encoder input cancels it; so does any app
+    request.
 - **Wake source**: Long press (~2 seconds) on the rotary encoder button. The button GPIO (an LP
   GPIO, pull-up held during sleep) is configured as a deep-sleep wake source; any press wakes the
   chip. On boot the firmware times the press: if the button is released before ~2 s, the device
@@ -485,7 +497,7 @@ All JSON bodies are objects. Shapes for the endpoints whose output isn't obvious
 | `DELETE /api/recordings/{id}` | `200` `{"deleted": 1}` |
 | `DELETE /api/recordings` | `200` `{"deleted": <count>}` |
 | `POST /api/time` | `200` `{"utc_us": <device time after the update>}` |
-| `GET` / `POST /api/settings` | `200` the full settings object: `{"brightness": "low"\|"medium"\|"high", "screen_timeout_s": 30\|60\|300\|0, "default_sample_rate_hz": …, "default_duration_s": 5\|10\|30\|60}` (`0` = never). `POST` accepts any subset of these keys and applies all or nothing. |
+| `GET` / `POST /api/settings` | `200` the full settings object: `{"brightness": "low"\|"medium"\|"high", "screen_timeout_s": 30\|60\|300\|0, "default_sample_rate_hz": …, "default_duration_s": 5\|10\|30\|60, "sleep_timeout_s": 300\|900\|1800\|0}` (`0` = never). `POST` accepts any subset of these keys and applies all or nothing. |
 | `POST /api/compress` | `200` `{"queued": <count>}` — progress via `/api/status`; `0` means nothing to compress (state stays `idle`) |
 | `POST /api/sleep` | `200` `{"sleeping": true}` |
 

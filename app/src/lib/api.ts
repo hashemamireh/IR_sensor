@@ -43,6 +43,9 @@ export interface DeviceSettings {
 	default_sample_rate_hz: number;
 	/** Quick Start's duration after each boot or wake */
 	default_duration_s: 5 | 10 | 30 | 60;
+	/** Idle time before the device deep-sleeps by itself (spec §7.1); 0 = never.
+	 *  Any request except GET /api/status counts as activity. */
+	sleep_timeout_s: 300 | 900 | 1800 | 0;
 }
 
 export const SAMPLE_RATES_HZ = [1000, 2000, 5000, 10000, 20000] as const;

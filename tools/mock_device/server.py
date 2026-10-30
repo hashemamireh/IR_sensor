@@ -132,12 +132,14 @@ def filename_for_id(rec_id):
 BRIGHTNESS = ("low", "medium", "high")
 SCREEN_TIMEOUTS_S = (30, 60, 300, 0)  # 0 = never
 DEFAULT_DURATIONS_S = (5, 10, 30, 60)
+SLEEP_TIMEOUTS_S = (300, 900, 1800, 0)  # 0 = never (§7.1)
 
 DEFAULT_SETTINGS = {
     "brightness": "medium",
     "screen_timeout_s": 60,
     "default_sample_rate_hz": DEFAULT_SAMPLE_RATE_HZ,
     "default_duration_s": 30,
+    "sleep_timeout_s": 900,
 }
 
 # key -> parser returning the normalised value, or None if invalid
@@ -146,6 +148,7 @@ SETTING_PARSERS = {
     "screen_timeout_s": lambda v: _uint_in(v, SCREEN_TIMEOUTS_S),
     "default_sample_rate_hz": lambda v: _uint_in(v, SAMPLE_RATES_HZ),
     "default_duration_s": lambda v: _uint_in(v, DEFAULT_DURATIONS_S),
+    "sleep_timeout_s": lambda v: _uint_in(v, SLEEP_TIMEOUTS_S),
 }
 
 
@@ -334,7 +337,8 @@ class Device:
     """
 
     def __init__(self, data_dir=None, capacity_bytes=25 * 1024 * 1024, time_scale=1.0,
-                 unsynced_clock=False, ssid="IRSensor-MOCK", overrun_every=0):
+                 unsynced_clock=False, ssid="IRSensor-MOCK", overrun_every=0,
+                 idle_sleep=False):
         self.lock = threading.Lock()
         self.data_dir = data_dir
         self.capacity_bytes = capacity_bytes
@@ -356,10 +360,13 @@ class Device:
         self.compress_total = 0
         self.asleep = False
         self.on_sleep = []  # callbacks run when the device falls asleep
+        self.last_activity = time.monotonic()
 
         if data_dir:
             os.makedirs(data_dir, exist_ok=True)
             self._load()
+        if idle_sleep:
+            threading.Thread(target=self._idle_watch, daemon=True).start()
 
     def _is_overrun(self, rec_id):
         """--overrun-every N marks every Nth recording ID as overrun."""
@@ -553,6 +560,26 @@ class Device:
         in for flash, and the clock keeps running through deep sleep (§7.3)."""
         with self.lock:
             self.asleep = False
+            self.last_activity = time.monotonic()
+
+    def note_activity(self):
+        """Any API request except GET /api/status restarts the idle countdown (§7.1)."""
+        with self.lock:
+            self.last_activity = time.monotonic()
+
+    def _idle_watch(self):
+        """--idle-sleep: sleep after sleep_timeout_s idle, as the device does (§7.1)."""
+        while True:
+            time.sleep(min(1.0, 0.25 / self.time_scale))
+            with self.lock:
+                now = time.monotonic()
+                if self.state != IDLE:
+                    self.last_activity = now  # the countdown only runs while idle
+                timeout = self.settings["sleep_timeout_s"]
+                due = (not self.asleep and timeout
+                       and (now - self.last_activity) * self.time_scale >= timeout)
+            if due:
+                self._fall_asleep()
 
     # -- settings
 
@@ -728,6 +755,8 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         self.body = self.rfile.read(length) if length else b""
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        if (self.command, path) != ("GET", "/api/status"):
+            self.device.note_activity()
 
         self.rec_id = None
         key_path = path
@@ -876,11 +905,13 @@ class DeviceServer:
     the same port.
     """
 
-    def __init__(self, device, host="127.0.0.1", port=8080, wake_after=None, **server_kw):
+    def __init__(self, device, host="127.0.0.1", port=8080, wake_after=None, announce=True,
+                 **server_kw):
         self.device = device
         self.host = host
         self.port = port
         self.wake_after = wake_after
+        self.announce = announce  # print sleep/wake events (independent of --quiet)
         self.server_kw = server_kw
         self.httpd = None
         self.lock = threading.Lock()
@@ -917,7 +948,7 @@ class DeviceServer:
 
 
     def _log(self, msg):
-        if not self.server_kw.get("quiet"):
+        if self.announce:
             log(msg)
 
 
@@ -943,6 +974,9 @@ def main(argv=None):
                    help="start the device clock at the epoch until POST /api/time")
     p.add_argument("--no-calibration", action="store_true",
                    help="answer GET /api/calibration with 503, as a chip without eFuse data")
+    p.add_argument("--idle-sleep", action="store_true",
+                   help="fall asleep after the sleep_timeout_s setting (default 900 s) with no "
+                        "requests other than GET /api/status, as the device does")
     p.add_argument("--wake-after", type=float, metavar="S",
                    help="after POST /api/sleep, wake again after S seconds "
                         "(default: stay asleep until SIGUSR1 or restart)")
@@ -952,7 +986,7 @@ def main(argv=None):
 
     device = Device(data_dir=args.data_dir, capacity_bytes=args.capacity,
                     time_scale=args.time_scale, unsynced_clock=args.unsynced_clock,
-                    overrun_every=args.overrun_every)
+                    overrun_every=args.overrun_every, idle_sleep=args.idle_sleep)
     if args.seed:
         device.seed(args.seed)
     server = DeviceServer(device, args.host, args.port, wake_after=args.wake_after,

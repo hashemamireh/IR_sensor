@@ -33,9 +33,10 @@ Then poll `http://127.0.0.1:8080/api/status`.
 | `--overrun-every N` | Mark every Nth recording ID as overrun: flags bit 1 is set, `"overrun": true` appears in the list, and 1–3 gaps of about 50 ms of samples are dropped. Use it to exercise the app's overrun warning. |
 | `--unsynced-clock` | Start the device clock at the Unix epoch, as after a full power loss, until `POST /api/time` is called. By default the mock uses the host clock. |
 | `--no-calibration` | Answer `GET /api/calibration` with `503 calibration_unavailable`, like a chip without eFuse calibration data. |
-| `--wake-after S` | After `POST /api/sleep`, wake again after S seconds of real time. By default the mock stays asleep until it gets `SIGUSR1` or is restarted. |
+| `--idle-sleep` | Fall asleep by itself after the `sleep_timeout_s` setting (default 900 s) without activity, as the device does (§7.1). It's off by default so app development isn't interrupted every 15 minutes. Combine it with `--time-scale` to get there faster. |
+| `--wake-after S` | After `POST /api/sleep` or an idle sleep, wake again after S seconds of real time. By default the mock stays asleep until it gets `SIGUSR1` or is restarted. |
 | `--no-cors` | Leave out the `Access-Control-Allow-Origin: *` header. |
-| `--quiet` | Don't log requests. |
+| `--quiet` | Don't log requests. Sleep and wake events are still printed. |
 
 Example session:
 
@@ -68,7 +69,9 @@ The tests run with a 10× time scale and take about 10 s. They cover:
 - deep sleep: 409 while busy, unreachable while asleep, waking by call and by
   `wake_after`
 - IDs never reused
-- time sync, settings, calibration and persistence
+- time sync, settings (including `sleep_timeout_s`), calibration and persistence
+- idle sleep: status polling alone lets the device sleep, other requests keep it
+  awake, 0 means never, and it's off without `--idle-sleep`
 
 ## Behaviour
 
@@ -90,6 +93,13 @@ The tests run with a 10× time scale and take about 10 s. They cover:
   startup line), after `--wake-after S`, or on a restart, back on the same port.
   Recordings, settings and the clock survive sleep, as they do on the device
   (flash, NVS, RTC).
+- Settings include `sleep_timeout_s`: 300, 900 (the default), 1800 or 0 (never).
+  It is listed last, as in `settings.cpp`. With `--idle-sleep` the mock falls
+  asleep, exactly as after `POST /api/sleep`, once `sleep_timeout_s` of device
+  time passes without activity. Activity is any request except `GET /api/status`.
+  The countdown only runs while idle: recording, saving and compressing hold it
+  at zero, and it restarts on wake. Without the flag the setting is stored and
+  returned but has no effect.
 
 **Recordings.** These are valid IREC v1 files:
 

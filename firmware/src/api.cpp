@@ -367,6 +367,9 @@ static esp_err_t handle_settings_set(httpd_req_t* req) {
         } else if (strcmp(key, "default_duration_s") == 0) {
             ok = get_uint(item, UINT32_MAX, &v) && settings::is_valid_default_duration(v);
             s.default_duration_s = v;
+        } else if (strcmp(key, "sleep_timeout_s") == 0) {
+            ok = get_uint(item, UINT32_MAX, &v) && settings::is_valid_sleep_timeout(v);
+            s.sleep_timeout_s = v;
         } else {
             bad_key = key;
             error   = "unknown_setting";
@@ -452,6 +455,15 @@ static esp_err_t handle_calibration(httpd_req_t* req) {
 
 // ── Server ──────────────────────────────────────────────────────────────────
 
+// Wraps every handler except the status poll: any other request means someone
+// is using the device, which postpones the idle deep sleep (spec §7.1)
+static esp_err_t with_activity(httpd_req_t* req) {
+    power_note_activity();
+    return reinterpret_cast<esp_err_t (*)(httpd_req_t*)>(req->user_ctx)(req);
+}
+
+#define ACTIVE(fn) .handler = with_activity, .user_ctx = reinterpret_cast<void*>(fn)
+
 void api_start() {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_uri_handlers = 16;
@@ -465,19 +477,19 @@ void api_start() {
     }
 
     const httpd_uri_t routes[] = {
-        {.uri = "/api/status",       .method = HTTP_GET,    .handler = handle_status,                .user_ctx = nullptr},
-        {.uri = "/api/record",       .method = HTTP_POST,   .handler = handle_record_start,          .user_ctx = nullptr},
-        {.uri = "/api/record/stop",  .method = HTTP_POST,   .handler = handle_record_stop,           .user_ctx = nullptr},
-        {.uri = "/api/recordings",   .method = HTTP_GET,    .handler = handle_recordings_list,       .user_ctx = nullptr},
-        {.uri = "/api/recordings",   .method = HTTP_DELETE, .handler = handle_recordings_delete_all, .user_ctx = nullptr},
-        {.uri = "/api/recordings/*", .method = HTTP_GET,    .handler = handle_recording_get,         .user_ctx = nullptr},
-        {.uri = "/api/recordings/*", .method = HTTP_DELETE, .handler = handle_recording_delete,      .user_ctx = nullptr},
-        {.uri = "/api/time",         .method = HTTP_POST,   .handler = handle_time,                  .user_ctx = nullptr},
-        {.uri = "/api/settings",     .method = HTTP_GET,    .handler = handle_settings_get,          .user_ctx = nullptr},
-        {.uri = "/api/settings",     .method = HTTP_POST,   .handler = handle_settings_set,          .user_ctx = nullptr},
-        {.uri = "/api/calibration",  .method = HTTP_GET,    .handler = handle_calibration,           .user_ctx = nullptr},
-        {.uri = "/api/compress",     .method = HTTP_POST,   .handler = handle_compress,              .user_ctx = nullptr},
-        {.uri = "/api/sleep",        .method = HTTP_POST,   .handler = handle_sleep,                 .user_ctx = nullptr},
+        {.uri = "/api/status",       .method = HTTP_GET,    .handler = handle_status, .user_ctx = nullptr},
+        {.uri = "/api/record",       .method = HTTP_POST,   ACTIVE(handle_record_start)},
+        {.uri = "/api/record/stop",  .method = HTTP_POST,   ACTIVE(handle_record_stop)},
+        {.uri = "/api/recordings",   .method = HTTP_GET,    ACTIVE(handle_recordings_list)},
+        {.uri = "/api/recordings",   .method = HTTP_DELETE, ACTIVE(handle_recordings_delete_all)},
+        {.uri = "/api/recordings/*", .method = HTTP_GET,    ACTIVE(handle_recording_get)},
+        {.uri = "/api/recordings/*", .method = HTTP_DELETE, ACTIVE(handle_recording_delete)},
+        {.uri = "/api/time",         .method = HTTP_POST,   ACTIVE(handle_time)},
+        {.uri = "/api/settings",     .method = HTTP_GET,    ACTIVE(handle_settings_get)},
+        {.uri = "/api/settings",     .method = HTTP_POST,   ACTIVE(handle_settings_set)},
+        {.uri = "/api/calibration",  .method = HTTP_GET,    ACTIVE(handle_calibration)},
+        {.uri = "/api/compress",     .method = HTTP_POST,   ACTIVE(handle_compress)},
+        {.uri = "/api/sleep",        .method = HTTP_POST,   ACTIVE(handle_sleep)},
     };
     for (const auto& r : routes) {
         ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &r));

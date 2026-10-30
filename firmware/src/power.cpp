@@ -1,5 +1,7 @@
 #include "power.h"
 
+#include <atomic>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
@@ -18,6 +20,14 @@
 #include "wifi_ap.h"
 
 static const char* TAG = "power";
+
+static std::atomic<uint32_t> last_activity_ms{0};
+
+void power_note_activity() {
+    last_activity_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+}
+
+uint32_t power_last_activity_ms() { return last_activity_ms.load(); }
 
 static constexpr gpio_num_t WAKE_PIN = static_cast<gpio_num_t>(PIN_ENC_SW);
 

@@ -78,6 +78,12 @@ public:
     // SSID, password and IP — also shown on first boot (spec §8.1).
     void show_wifi_info();
 
+    // "Going to sleep in N s" before the idle deep sleep (spec §7.1). Call again
+    // to update the countdown; dismiss when there's activity.
+    void show_sleep_warning(uint32_t seconds_left);
+    void dismiss_sleep_warning();
+    bool sleep_warning_shown() const { return sleep_warning_; }
+
     // Something changed since the last render().
     bool dirty() const { return dirty_; }
 
@@ -144,6 +150,7 @@ private:
     uint32_t            rec_rate_hz_;     // "last used" for Quick Start
     uint32_t            rec_duration_s_;
     bool                dirty_ = true;
+    bool                sleep_warning_ = false;  // the warning screen is on top
 };
 
 }  // namespace ui

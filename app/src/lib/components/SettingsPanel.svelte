@@ -66,6 +66,21 @@
 			{ value: 0, label: 'Never' },
 		]} />
 
+		<!-- Only firmware with the idle-sleep feature reports this key -->
+		{#if saved && 'sleep_timeout_s' in saved}
+			<span class="label">Sleep after</span>
+			<Segmented label="Sleep after" bind:value={draft.sleep_timeout_s} options={[
+				{ value: 300, label: '5 min' },
+				{ value: 900, label: '15 min' },
+				{ value: 1800, label: '30 min' },
+				{ value: 0, label: 'Never' },
+			]} />
+			<p class="muted small">
+				Idle time before the device goes into deep sleep. Recording, downloading or any change from the app counts as
+				activity; the app just showing the device's status doesn't.
+			</p>
+		{/if}
+
 		<span class="label">Quick Start sample rate</span>
 		<Segmented label="Quick Start sample rate" bind:value={draft.default_sample_rate_hz}
 			options={SAMPLE_RATES_HZ.map((r) => ({ value: r as number, label: `${r / 1000} kHz` }))} />

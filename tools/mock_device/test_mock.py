@@ -31,7 +31,8 @@ class MockDeviceTest(unittest.TestCase):
 
     def start_server(self, device, **kw):
         self.device = device
-        self.server = server.DeviceServer(device, "127.0.0.1", 0, quiet=True, **kw)
+        self.server = server.DeviceServer(device, "127.0.0.1", 0, quiet=True, announce=False,
+                                          **kw)
         self.server.start()
         self.base = "http://127.0.0.1:%d" % self.server.port
 
@@ -386,6 +387,39 @@ class MockDeviceTest(unittest.TestCase):
         time.sleep(0.4)
         self.assertEqual(self.request("GET", "/api/status")[0], 200)
 
+    def test_idle_sleep(self):
+        # 1000x: the 300 s timeout takes 0.3 s
+        self.tearDown()
+        self.start_server(server.Device(time_scale=1000, idle_sleep=True))
+        self.request("POST", "/api/settings", {"sleep_timeout_s": 300})
+
+        # status polling alone doesn't keep it awake
+        deadline = time.monotonic() + 3
+        with self.assertRaises(OSError):
+            while time.monotonic() < deadline:
+                self.request("GET", "/api/status")
+                time.sleep(0.02)
+        self.assertTrue(self.device.asleep)
+        self.server.wake()
+
+        # other requests do
+        for _ in range(10):
+            self.assertEqual(self.request("GET", "/api/settings")[0], 200)
+            time.sleep(0.1)
+        self.assertFalse(self.device.asleep)
+
+        # 0 = never
+        self.request("POST", "/api/settings", {"sleep_timeout_s": 0})
+        time.sleep(0.6)
+        self.assertEqual(self.request("GET", "/api/status")[0], 200)
+
+    def test_idle_sleep_off_by_default(self):
+        self.tearDown()
+        self.start_server(server.Device(time_scale=1000))
+        self.request("POST", "/api/settings", {"sleep_timeout_s": 300})
+        time.sleep(0.6)
+        self.assertEqual(self.request("GET", "/api/status")[0], 200)
+
     # -- time, settings, calibration
 
     def test_time_sync(self):
@@ -417,6 +451,15 @@ class MockDeviceTest(unittest.TestCase):
                          (400, {"error": "invalid_setting", "field": "screen_timeout_s"}))
         self.assertEqual(self.request("POST", "/api/settings", {"wifi_ssid": "x"}),
                          (400, {"error": "unknown_setting", "field": "wifi_ssid"}))
+        self.assertEqual(server.DEFAULT_SETTINGS["sleep_timeout_s"], 900)
+        self.assertEqual(list(server.DEFAULT_SETTINGS)[-1], "sleep_timeout_s")  # settings.cpp order
+        current = self.request("GET", "/api/settings")[1]
+        for v in (300, 900, 1800, 0):
+            self.assertEqual(self.request("POST", "/api/settings", {"sleep_timeout_s": v}),
+                             (200, dict(current, sleep_timeout_s=v)))
+        for v in (600, -1, "900", None):
+            self.assertEqual(self.request("POST", "/api/settings", {"sleep_timeout_s": v}),
+                             (400, {"error": "invalid_setting", "field": "sleep_timeout_s"}))
         self.assertEqual(self.request("POST", "/api/settings", {"default_sample_rate_hz": 2000})
                          [1]["default_sample_rate_hz"], 2000)
         # all-or-nothing

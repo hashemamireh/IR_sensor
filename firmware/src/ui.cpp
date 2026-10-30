@@ -117,9 +117,10 @@ static void task_ui(void*) {
 
     bool             screen_on  = true;
     bool             force_draw = true;
-    uint32_t         last_activity = now_ms();
+    uint32_t         last_input = now_ms();  // encoder, button, state changes — for the screen timeout
     uint32_t         last_draw  = 0;
     api::DeviceState last_state = device_state();
+    power_note_activity();                   // start the idle-sleep clock at boot
 
     for (;;) {
         const uint32_t now = now_ms();
@@ -128,7 +129,8 @@ static void task_ui(void*) {
         int             steps = encoder_take_steps();
         ui::ButtonEvent ev    = button.update(encoder_button_pressed(), now);
         if (steps != 0 || ev != ui::ButtonEvent::None) {
-            last_activity = now;
+            last_input = now;
+            power_note_activity();
             if (!screen_on) {
                 // Any interaction wakes the screen and is otherwise ignored (spec §7.2)
                 display_set_power(true);
@@ -146,8 +148,8 @@ static void task_ui(void*) {
         menu.tick();
         const api::DeviceState state = device_state();
         if (state != last_state) {
-            last_state    = state;
-            last_activity = now;
+            last_state = state;
+            last_input = now;
             if (!screen_on) {
                 display_set_power(true);
                 screen_on = true;
@@ -163,10 +165,34 @@ static void task_ui(void*) {
             force_draw = false;
         }
 
+        // ── Idle deep sleep (spec §7.1): countdown, warning, sleep ──
+        settings::Settings s = settings_get();
+        if (state != api::DeviceState::Idle) power_note_activity();  // busy counts as activity
+        // Signed: the API may note activity just after `now` was read
+        int32_t  since   = static_cast<int32_t>(now - power_last_activity_ms());
+        uint32_t idle_ms = since > 0 ? static_cast<uint32_t>(since) : 0;
+        if (s.sleep_timeout_s > 0 && idle_ms + SLEEP_WARNING_S * 1000 >= s.sleep_timeout_s * 1000) {
+            uint32_t left_ms = s.sleep_timeout_s * 1000 > idle_ms ? s.sleep_timeout_s * 1000 - idle_ms : 0;
+            if (left_ms == 0) {
+                if (!power_deep_sleep()) power_note_activity();  // became busy — start over
+            } else {
+                if (!screen_on) {
+                    display_set_power(true);
+                    screen_on = true;
+                }
+                uint32_t secs = (left_ms + 999) / 1000;
+                static uint32_t shown = 0;
+                if (!menu.sleep_warning_shown() || secs != shown) menu.show_sleep_warning(secs);
+                shown = secs;
+            }
+        } else if (menu.sleep_warning_shown()) {
+            menu.dismiss_sleep_warning();  // activity elsewhere (e.g. the app) postponed it
+        }
+
         // ── Screen timeout and brightness — idle only, to keep I2C quiet while busy ──
         if (state == api::DeviceState::Idle) {
-            settings::Settings s = settings_get();
-            if (screen_on && s.screen_timeout_s > 0 && now - last_activity >= s.screen_timeout_s * 1000) {
+            if (screen_on && !menu.sleep_warning_shown() && s.screen_timeout_s > 0 &&
+                now - last_input >= s.screen_timeout_s * 1000) {
                 display_set_power(false);
                 screen_on = false;
             }
@@ -176,9 +202,11 @@ static void task_ui(void*) {
             }
         }
 
-        // ── LED ──
-        bool low_battery = battery_mv() > 0 && battery_pct() <= ui::LOW_BATTERY_PCT;
-        led_set(ui::led_color(state, wifi_ap_client_connected(), low_battery, now));
+        // ── LED — blinks during the sleep warning ──
+        bool    low_battery = battery_mv() > 0 && battery_pct() <= ui::LOW_BATTERY_PCT;
+        ui::Rgb color       = ui::led_color(state, wifi_ap_client_connected(), low_battery, now);
+        if (menu.sleep_warning_shown() && (now / 250) % 2) color = {0, 0, 0};
+        led_set(color);
 
         vTaskDelay(pdMS_TO_TICKS(UI_TICK_MS));
     }

@@ -282,6 +282,38 @@ static void test_deep_sleep_refused_shows_message() {
     TEST_ASSERT_EQUAL_STRING("Device busy", m.title().c_str());
 }
 
+static void test_sleep_timeout_setting() {
+    FakeDevice dev;
+    Menu m(dev);
+    press(m);
+    right(m, 4);
+    press(m);           // Settings
+    right(m, 4);
+    press(m);           // Sleep after
+    TEST_ASSERT_EQUAL_STRING("Sleep after", m.title().c_str());
+    right(m, 10);       // Never
+    press(m);
+    TEST_ASSERT_EQUAL_UINT32(0, dev.cfg.sleep_timeout_s);
+}
+
+static void test_sleep_warning_counts_down_and_any_input_dismisses() {
+    FakeDevice dev;
+    Menu m(dev);
+    press(m);           // in the main menu
+    m.show_sleep_warning(10);
+    TEST_ASSERT_TRUE(m.sleep_warning_shown());
+    TEST_ASSERT_EQUAL_STRING("Going to sleep", m.title().c_str());
+    preview(m, "14_sleep_warning");
+    m.show_sleep_warning(9);   // countdown updates in place
+    m.handle(Input::Right);    // even a turn means "stay awake"
+    TEST_ASSERT_FALSE(m.sleep_warning_shown());
+    TEST_ASSERT_EQUAL_STRING("Menu", m.title().c_str());  // back where we were
+
+    m.show_sleep_warning(5);
+    m.dismiss_sleep_warning();
+    TEST_ASSERT_EQUAL_STRING("Menu", m.title().c_str());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_home_menu_and_back);
@@ -295,5 +327,7 @@ int main() {
     RUN_TEST(test_status_bar_shows_connection);
     RUN_TEST(test_compress_all_shows_progress_on_home);
     RUN_TEST(test_deep_sleep_refused_shows_message);
+    RUN_TEST(test_sleep_timeout_setting);
+    RUN_TEST(test_sleep_warning_counts_down_and_any_input_dismisses);
     return UNITY_END();
 }
