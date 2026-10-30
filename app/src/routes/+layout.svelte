@@ -1,5 +1,11 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
+	import { blockPageZoom } from '$lib/touch';
+
 	let { children } = $props();
+
+	// Pinch zooms the graph, never the whole app (WebKitGTK ignores the viewport tag)
+	onMount(() => blockPageZoom());
 </script>
 
 {@render children()}
