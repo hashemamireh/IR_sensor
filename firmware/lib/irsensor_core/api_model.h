@@ -9,7 +9,7 @@
 
 namespace api {
 
-enum class DeviceState { Idle, Recording, Saving, Compressing };
+enum class DeviceState { Idle, Recording, Saving, Compressing, Live };
 
 const char* state_str(DeviceState s);
 
@@ -27,9 +27,13 @@ enum class Route {
     SettingsSet,
     Calibration,
     Sleep,
+    LiveStart,
+    LiveStop,
+    LiveData,
 };
 
-// §8.2 "Requests During Recording": false means respond 409 Conflict.
+// §8.2 "Requests During Recording": false means respond 409 Conflict. Live
+// view doesn't write flash, so most requests stay allowed during it (§3.6).
 bool route_allowed(DeviceState s, Route r);
 
 struct StatusInfo {

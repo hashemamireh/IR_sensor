@@ -33,6 +33,7 @@ Then poll `http://127.0.0.1:8080/api/status`.
 | `--overrun-every N` | Mark every Nth recording ID as overrun: flags bit 1 is set, `"overrun": true` appears in the list, and 1–3 gaps of about 50 ms of samples are dropped. Use it to exercise the app's overrun warning. |
 | `--unsynced-clock` | Start the device clock at the Unix epoch, as after a full power loss, until `POST /api/time` is called. By default the mock uses the host clock. |
 | `--no-calibration` | Answer `GET /api/calibration` with `503 calibration_unavailable`, like a chip without eFuse calibration data. |
+| `--live-timeout` | End live mode after the `live_timeout_s` setting (default 300 s) without activity, as the device does (§3.6). Polling `GET /api/status` and `GET /api/live` doesn't count as activity. It's off by default, like `--idle-sleep`. |
 | `--idle-sleep` | Fall asleep by itself after the `sleep_timeout_s` setting (default 900 s) without activity, as the device does (§7.1). It's off by default so app development isn't interrupted every 15 minutes. Combine it with `--time-scale` to get there faster. |
 | `--wake-after S` | After `POST /api/sleep` or an idle sleep, wake again after S seconds of real time. By default the mock stays asleep until it gets `SIGUSR1` or is restarted. |
 | `--no-cors` | Leave out the `Access-Control-Allow-Origin: *` header. |
@@ -72,6 +73,11 @@ The tests run with a 10× time scale and take about 10 s. They cover:
 - time sync, settings (including `sleep_timeout_s`), calibration and persistence
 - idle sleep: status polling alone lets the device sleep, other requests keep it
   awake, 0 means never, and it's off without `--idle-sleep`
+- live mode: buckets and pulses, polling with `since`, the 640-bucket ring and the
+  250-bucket limit, sequence numbers continuing across sessions, `invalid_query`,
+  409 rules during live mode, recording or sleeping from live mode, the live
+  timeout (and that it's off without `--live-timeout`), and live mode holding
+  off idle sleep
 
 ## Behaviour
 
@@ -93,12 +99,45 @@ The tests run with a 10× time scale and take about 10 s. They cover:
   startup line), after `--wake-after S`, or on a restart, back on the same port.
   Recordings, settings and the clock survive sleep, as they do on the device
   (flash, NVS, RTC).
+- **Live mode** (§3.6):
+  - `POST /api/live/start` works from `idle` only. It returns
+    `{"sample_rate_hz": 10000, "bucket_ms": 20}`, and the state becomes `live`.
+  - `POST /api/live/stop` works in `live` only. It returns `{"stopped": true}`,
+    and the state is `idle` immediately.
+  - `GET /api/live?since=N` works in `live` only. It returns
+    `{"bucket_ms", "first_seq", "next_seq", "overruns", "buckets": [[min, max, mean], …]}`.
+    The values are raw counts, oldest first, at most 250 per response. It doesn't
+    count as activity.
+  - **Buckets** are generated in real time, faster with `--time-scale`, from the
+    firmware's `synthetic::sample()` pattern: a 200 ± 8 baseline with a 5 ms pulse
+    to 2500 every 250 ms. Each 20 ms bucket is the min/max/rounded mean of 200
+    samples at 10 kHz, so a pulse shows as a spike in max (2508) with a mean of
+    about 775.
+  - **The ring** holds the last 640 buckets. It is cleared at each start, but
+    sequence numbers continue across sessions. A `since` that is omitted, older
+    than the ring, or newer than `next_seq` starts at the oldest bucket held. A
+    non-numeric `since` gets `400 invalid_query` with `"field": "since"`.
+    `overruns` is always 0.
+  - **During live mode**, everything is served except `POST /api/compress`,
+    `POST /api/live/start` and `POST /api/record/stop`, which get 409 with
+    `"state": "live"`. `POST /api/record` ends live mode and starts the recording.
+    As in the firmware, live mode ends before `recording::validate` runs, so a
+    recording refused for its rate, duration or free space still ends live mode.
+    A body with missing or non-number fields is rejected first and leaves live
+    mode running.
+    `POST /api/sleep` ends live mode and sleeps.
+  - **Timeouts:** live mode holds the idle-sleep countdown at zero, which then
+    starts when live mode ends. With `--live-timeout`, live mode ends after
+    `live_timeout_s` of device time without activity.
 - Settings include `sleep_timeout_s`: 300, 900 (the default), 1800 or 0 (never).
   It is listed last, as in `settings.cpp`. With `--idle-sleep` the mock falls
   asleep, exactly as after `POST /api/sleep`, once `sleep_timeout_s` of device
   time passes without activity. Activity is any request except `GET /api/status`.
   The countdown only runs while idle: recording, saving and compressing hold it
   at zero, and it restarts on wake. Without the flag the setting is stored and
+  returned but has no effect.
+- Settings also include `live_timeout_s`: 60, 300 (the default), 600 or 1800. It
+  is listed after `sleep_timeout_s`. Without `--live-timeout` it is stored and
   returned but has no effect.
 
 **Recordings.** These are valid IREC v1 files:
@@ -166,6 +205,9 @@ most 12 mV). It is monotonic, with 4096 entries at `attenuation_db: 12`.
   `"confirm": "DELETE_ALL"`. Any other object gets `confirmation_required`.
 - **`POST /api/settings`.** The first bad key, in body order, is reported as
   `invalid_setting` or `unknown_setting`, with `"field"`.
+- **`GET /api/live?since=N`.** `since` must be all decimal digits, which is
+  what `strtoull` must consume entirely in `api.cpp`. Otherwise the result is
+  `invalid_query` with `"field": "since"`. Any other query parameters are ignored.
 - **Malformed recording IDs.** A segment that isn't 1–5 digits gets `404 not_found`.
 
 ## Ambiguities in the spec, and what the mock does
@@ -181,32 +223,41 @@ each one, and the spec should record the decision.
    non-idle states. `api::route_allowed` allows stop only while recording, so when
    idle the mock answers `409 {"error":"busy","state":"idle"}`. The same applies
    while saving or compressing.
-3. **Time between `POST /api/sleep` and sleeping.** Requests in the ~0.5 s before
+3. **Live mode details.**
+   - `POST /api/live/stop` returns the state to `idle` immediately; the spec says
+     "shortly after".
+   - The mock never reports live `overruns`. On the device, flash work during
+     live mode, such as downloads or deletes, can drop samples.
+   - A recording refused during live mode ends live mode if `recording::validate`
+     refused it, as `recorder_start` does. The spec doesn't say what should happen.
+   - The mock URL-decodes the query string; `esp_http_server`'s
+     `httpd_query_key_value` doesn't.
+4. **Time between `POST /api/sleep` and sleeping.** Requests in the ~0.5 s before
    the device sleeps are still served. If one of them starts a recording, the
    mock cancels the sleep. The spec doesn't say what the firmware does.
-4. **When the recording ID is allocated.** The status shows `recording.id` during
+5. **When the recording ID is allocated.** The status shows `recording.id` during
    capture, so the ID is taken from the counter at start. A recording that never
    gets saved would leave a gap, which §4.6 allows.
-5. **Very short or immediately stopped recordings.** The mock saves them even if
+6. **Very short or immediately stopped recordings.** The mock saves them even if
    they have 0 samples. The firmware might discard them instead.
-6. **WiFi SSID and password.** App feature §10.3.6 lists them as remote settings,
+7. **WiFi SSID and password.** App feature §10.3.6 lists them as remote settings,
    but they aren't in `settings.cpp` or the settings shape in §8.2. The mock
    rejects them as `unknown_setting`.
-7. **CORS.** The spec doesn't mention it. A fetch from the Tauri webview to
+8. **CORS.** The spec doesn't mention it. A fetch from the Tauri webview to
    `192.168.4.1` is cross-origin unless the app goes through the Tauri HTTP
    plugin (Rust side). The mock sends `Access-Control-Allow-Origin: *` and answers
    `OPTIONS` preflights. The real firmware sends neither.
-8. **Time before sync.** The real clock is wrong until the first
+9. **Time before sync.** The real clock is wrong until the first
    `POST /api/time`. The mock uses the host clock unless you pass
    `--unsynced-clock`.
-9. **Recording ID limit.** Filenames have 5 digits, so the highest ID is 99999
+10. **Recording ID limit.** Filenames have 5 digits, so the highest ID is 99999
    (`recording::MAX_ID`). The spec doesn't say what happens after that, and the
    mock doesn't enforce it.
-10. **Old `--data-dir` folders.** Files written by earlier versions of the mock
+11. **Old `--data-dir` folders.** Files written by earlier versions of the mock
     have 0 in byte 0x1A, so they are listed with `attenuation_db: 0`. Delete the
     folder to regenerate it.
-11. **What `free_bytes` counts.** The mock subtracts only the file sizes from the
+12. **What `free_bytes` counts.** The mock subtracts only the file sizes from the
     capacity. It doesn't model LittleFS overhead, and it doesn't reserve space for
     a recording in progress.
-12. **Codes the mock never returns.** It never produces `500 storage_error`.
+13. **Codes the mock never returns.** It never produces `500 storage_error`.
     `503 calibration_unavailable` only appears with `--no-calibration`.

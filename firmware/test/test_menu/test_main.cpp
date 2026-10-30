@@ -78,6 +78,17 @@ struct FakeDevice : ui::Device {
     bool set_wifi_enabled(bool on) override { st.wifi_enabled = on; return true; }
     bool deep_sleep() override { sleeps++; return false; }  // the real one only returns when busy
     int  sleeps = 0;
+
+    bool live_busy = false;
+    int  live_stops = 0;
+    live::View view;
+    bool start_live() override {
+        if (live_busy) return false;
+        st.state = DeviceState::Live;
+        return true;
+    }
+    void stop_live() override { live_stops++; }
+    live::View live_view() override { return view; }
 };
 
 // Writes the rendered screen as ASCII art when UI_PREVIEW_DIR is set
@@ -187,7 +198,7 @@ static void test_delete_recording() {
     FakeDevice dev;
     Menu m(dev);
     press(m);           // main
-    right(m);
+    right(m, 2);
     press(m);           // Recordings
     TEST_ASSERT_EQUAL_STRING("Recordings (3)", m.title().c_str());
     preview(m, "08_recordings");
@@ -212,7 +223,7 @@ static void test_settings_change_is_saved() {
     FakeDevice dev;
     Menu m(dev);
     press(m);
-    right(m, 4);
+    right(m, 5);
     press(m);           // Settings
     preview(m, "10_settings");
     press(m);           // Brightness
@@ -231,7 +242,7 @@ static void test_wifi_info_and_toggle() {
     preview(m, "11_wifi_info");
     press(m);
     press(m);
-    right(m, 2);
+    right(m, 3);
     press(m);           // WiFi menu
     press(m);           // AP: On → Off
     TEST_ASSERT_FALSE(dev.st.wifi_enabled);
@@ -253,7 +264,7 @@ static void test_compress_all_shows_progress_on_home() {
     FakeDevice dev;
     Menu m(dev);
     press(m);
-    right(m, 3);
+    right(m, 4);
     press(m);           // Storage
     TEST_ASSERT_EQUAL_STRING("Storage", m.title().c_str());
     preview(m, "12_storage");
@@ -273,7 +284,7 @@ static void test_deep_sleep_refused_shows_message() {
     FakeDevice dev;
     Menu m(dev);
     press(m);
-    right(m, 5);
+    right(m, 6);
     press(m);           // Deep Sleep
     TEST_ASSERT_EQUAL_STRING("Deep sleep?", m.title().c_str());
     right(m);
@@ -286,7 +297,7 @@ static void test_sleep_timeout_setting() {
     FakeDevice dev;
     Menu m(dev);
     press(m);
-    right(m, 4);
+    right(m, 5);
     press(m);           // Settings
     right(m, 4);
     press(m);           // Sleep after
@@ -300,18 +311,85 @@ static void test_sleep_warning_counts_down_and_any_input_dismisses() {
     FakeDevice dev;
     Menu m(dev);
     press(m);           // in the main menu
-    m.show_sleep_warning(10);
-    TEST_ASSERT_TRUE(m.sleep_warning_shown());
+    m.show_countdown("Going to sleep", "Press to stay awake", 10);
+    TEST_ASSERT_TRUE(m.countdown_shown());
     TEST_ASSERT_EQUAL_STRING("Going to sleep", m.title().c_str());
     preview(m, "14_sleep_warning");
-    m.show_sleep_warning(9);   // countdown updates in place
+    m.show_countdown("Going to sleep", "Press to stay awake", 9);  // updates in place
     m.handle(Input::Right);    // even a turn means "stay awake"
-    TEST_ASSERT_FALSE(m.sleep_warning_shown());
+    TEST_ASSERT_FALSE(m.countdown_shown());
     TEST_ASSERT_EQUAL_STRING("Menu", m.title().c_str());  // back where we were
 
-    m.show_sleep_warning(5);
-    m.dismiss_sleep_warning();
+    m.show_countdown("Going to sleep", "Press to stay awake", 5);
+    m.dismiss_countdown();
     TEST_ASSERT_EQUAL_STRING("Menu", m.title().c_str());
+}
+
+static void fill_view(live::View& v) {
+    v.valid = true;
+    v.millivolts = true;
+    v.now = 412;
+    v.peak = 1850;
+    v.columns = live::OLED_COLUMNS;
+    for (size_t i = 0; i < v.columns; i++) {
+        v.col_min[i] = 380 + (i * 7) % 40;
+        v.col_max[i] = v.col_min[i] + 20;
+        if (i % 25 == 3) v.col_max[i] = 1850;  // pulses
+    }
+}
+
+static void test_live_view_press_records_long_press_exits() {
+    FakeDevice dev;
+    fill_view(dev.view);
+    Menu m(dev);
+    press(m);
+    right(m);
+    press(m);           // Live View
+    TEST_ASSERT_EQUAL_STRING("Live", m.title().c_str());
+    TEST_ASSERT_FALSE(m.frozen());
+    preview(m, "15_live_view");
+
+    // The countdown sits on top; any input dismisses it without recording
+    m.show_countdown("Live view ends", "Press to continue", 10);
+    preview(m, "16_live_ends");
+    press(m);
+    TEST_ASSERT_EQUAL_STRING("Live", m.title().c_str());
+    TEST_ASSERT_EQUAL_UINT32(0, dev.started_rate);
+
+    m.handle(Input::LongPress);
+    TEST_ASSERT_EQUAL_INT(1, dev.live_stops);
+
+    press(m);           // records with the Record menu's settings
+    TEST_ASSERT_EQUAL_UINT32(10000, dev.started_rate);
+    TEST_ASSERT_TRUE(m.frozen());
+    TEST_ASSERT_EQUAL_STRING("Recording #4", m.title().c_str());
+}
+
+static void test_live_view_ends_back_to_home_and_busy_refusal() {
+    FakeDevice dev;
+    Menu m(dev);
+    press(m);
+    right(m);
+    press(m);           // Live View
+    dev.st.state = DeviceState::Idle;
+    m.tick();
+    press(m);
+    TEST_ASSERT_EQUAL_STRING("Menu", m.title().c_str());  // was on home
+
+    dev.live_busy = true;
+    right(m);
+    press(m);
+    TEST_ASSERT_EQUAL_STRING("Device busy", m.title().c_str());
+}
+
+static void test_live_view_without_data_yet() {
+    FakeDevice dev;
+    dev.st.state = DeviceState::Live;
+    Menu m(dev);
+    m.tick();
+    ui::Framebuffer fb;
+    m.render(fb);  // must not crash with an empty view
+    TEST_ASSERT_FALSE(m.dirty());
 }
 
 int main() {
@@ -329,5 +407,8 @@ int main() {
     RUN_TEST(test_deep_sleep_refused_shows_message);
     RUN_TEST(test_sleep_timeout_setting);
     RUN_TEST(test_sleep_warning_counts_down_and_any_input_dismisses);
+    RUN_TEST(test_live_view_press_records_long_press_exits);
+    RUN_TEST(test_live_view_ends_back_to_home_and_busy_refusal);
+    RUN_TEST(test_live_view_without_data_yet);
     return UNITY_END();
 }

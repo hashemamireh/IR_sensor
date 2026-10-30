@@ -45,12 +45,20 @@ bool is_valid_sleep_timeout(uint32_t s) {
     return false;
 }
 
+bool is_valid_live_timeout(uint32_t s) {
+    for (uint32_t t : LIVE_TIMEOUTS_S) {
+        if (t == s) return true;
+    }
+    return false;
+}
+
 bool is_valid(const Settings& s) {
     return s.brightness <= Brightness::High
         && is_valid_screen_timeout(s.screen_timeout_s)
         && recording::is_valid_rate(s.default_rate_hz)
         && is_valid_default_duration(s.default_duration_s)
-        && is_valid_sleep_timeout(s.sleep_timeout_s);
+        && is_valid_sleep_timeout(s.sleep_timeout_s)
+        && is_valid_live_timeout(s.live_timeout_s);
 }
 
 void write_json(JsonWriter& w, const Settings& s) {
@@ -60,6 +68,7 @@ void write_json(JsonWriter& w, const Settings& s) {
         .key("default_sample_rate_hz").num(s.default_rate_hz)
         .key("default_duration_s").num(s.default_duration_s)
         .key("sleep_timeout_s").num(s.sleep_timeout_s)
+        .key("live_timeout_s").num(s.live_timeout_s)
      .end_object();
 }
 

@@ -17,9 +17,10 @@ Rgb led_color(api::DeviceState state, bool client_connected, bool low_battery, u
     if (state == api::DeviceState::Recording || state == api::DeviceState::Saving) {
         return {pulse(now_ms), 0, 0};
     }
-    if (low_battery)      return {LEVEL, LEVEL / 2, 0};
-    if (client_connected) return {0, LEVEL, LEVEL};
-    return {0, LEVEL, 0};
+    uint8_t level = state == api::DeviceState::Live ? pulse(now_ms) : LEVEL;
+    if (low_battery)      return {level, static_cast<uint8_t>(level / 2), 0};
+    if (client_connected) return {0, level, level};
+    return {0, level, 0};
 }
 
 }  // namespace ui

@@ -1,5 +1,7 @@
 #include "ui.h"
 
+#include <algorithm>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -7,6 +9,7 @@
 
 #include "battery.h"
 #include "button.h"
+#include "calibration.h"
 #include "compressor.h"
 #include "config.h"
 #include "device_state.h"
@@ -26,6 +29,14 @@ static const char* TAG = "ui";
 
 static constexpr TickType_t LOCK_WAIT = pdMS_TO_TICKS(200);
 static constexpr uint32_t   STATUS_REFRESH_MS = 1000;
+static constexpr uint32_t   LIVE_REFRESH_MS   = 100;  // live view redraws 10×/s (spec §3.6)
+
+// Raw ADC count → mV with the chip's calibration (identity if there is none)
+static uint16_t to_mv(uint16_t raw) {
+    int mv = raw;
+    calibration_raw_to_mv(raw, &mv);
+    return static_cast<uint16_t>(mv);
+}
 
 // The menu's view of the firmware. Flash work takes the device lock and is
 // refused unless idle, same as the HTTP API.
@@ -100,7 +111,23 @@ public:
     bool deep_sleep() override { return power_deep_sleep(); }
 
     bool set_wifi_enabled(bool on) override { return wifi_ap_set_enabled(on) == ESP_OK; }
+
+    bool start_live() override { return live_start(); }
+    void stop_live() override { live_stop(); }
+
+    live::View live_view() override {
+        static live::Bucket buckets[live::OLED_COLUMNS * live::BUCKETS_PER_COLUMN];  // UI task only
+        size_t     n = live_latest(buckets, sizeof(buckets) / sizeof(buckets[0]));
+        live::View v;
+        live::make_view(buckets, n, to_mv, &v);
+        v.millivolts = calibration_available();
+        return v;
+    }
 };
+
+// Signed difference of two millisecond timestamps — robust to the other one
+// being a few ms newer (it's written by other tasks) and to wrap-around
+static int32_t ms_since(uint32_t now, uint32_t then) { return static_cast<int32_t>(now - then); }
 
 static uint32_t now_ms() { return static_cast<uint32_t>(esp_timer_get_time() / 1000); }
 
@@ -118,9 +145,34 @@ static void task_ui(void*) {
     bool             screen_on  = true;
     bool             force_draw = true;
     uint32_t         last_input = now_ms();  // encoder, button, state changes — for the screen timeout
+    uint32_t         last_busy  = now_ms();  // last moment the device wasn't idle
     uint32_t         last_draw  = 0;
     api::DeviceState last_state = device_state();
-    power_note_activity();                   // start the idle-sleep clock at boot
+    power_note_activity();                   // start the timeouts' clock at boot
+
+    // Which timeout's countdown is on screen, so each only dismisses its own
+    enum class Countdown { None, Sleep, Live };
+    Countdown countdown = Countdown::None;
+    uint32_t  countdown_secs = 0;
+
+    auto show_countdown = [&](Countdown kind, uint32_t left_ms) {
+        if (!screen_on) {
+            display_set_power(true);
+            screen_on = true;
+        }
+        uint32_t secs = (left_ms + 999) / 1000;
+        if (countdown != kind || secs != countdown_secs || !menu.countdown_shown()) {
+            if (kind == Countdown::Sleep) menu.show_countdown("Going to sleep", "Press to stay awake", secs);
+            else                          menu.show_countdown("Live view ends", "Press to continue", secs);
+        }
+        countdown      = kind;
+        countdown_secs = secs;
+    };
+    auto clear_countdown = [&](Countdown kind) {
+        if (countdown != kind) return;
+        menu.dismiss_countdown();
+        countdown = Countdown::None;
+    };
 
     for (;;) {
         const uint32_t now = now_ms();
@@ -142,6 +194,7 @@ static void task_ui(void*) {
                 if (ev == ui::ButtonEvent::Press)     menu.handle(ui::Input::Press);
                 if (ev == ui::ButtonEvent::LongPress) menu.handle(ui::Input::LongPress);
             }
+            if (!menu.countdown_shown()) countdown = Countdown::None;  // input dismissed it
         }
 
         // ── Device state (e.g. a recording started from the app) ──
@@ -150,14 +203,52 @@ static void task_ui(void*) {
         if (state != last_state) {
             last_state = state;
             last_input = now;
+            countdown  = Countdown::None;  // a state change resets the menu
             if (!screen_on) {
                 display_set_power(true);
                 screen_on = true;
             }
         }
+        if (state != api::DeviceState::Idle) last_busy = now;
 
-        // ── Draw: on change, plus a status-bar refresh — never while frozen (§6.2) ──
-        bool refresh = !menu.frozen() && now - last_draw >= STATUS_REFRESH_MS;
+        const settings::Settings s = settings_get();
+
+        // ── Live view timeout (spec §3.6): untouched for live_timeout_s → back to idle ──
+        if (state == api::DeviceState::Live) {
+            int32_t untouched = std::max<int32_t>(0, ms_since(now, power_last_activity_ms()));
+            int32_t left      = static_cast<int32_t>(s.live_timeout_s * 1000) - untouched;
+            if (left <= 0) {
+                clear_countdown(Countdown::Live);
+                live_stop();
+            } else if (left <= static_cast<int32_t>(SLEEP_WARNING_S * 1000)) {
+                show_countdown(Countdown::Live, left);
+            } else {
+                clear_countdown(Countdown::Live);  // the app touched it meanwhile
+            }
+        }
+
+        // ── Idle deep sleep (spec §7.1): counts from the later of user activity
+        //    and the device last being busy (recording, live view, …) ──
+        if (state == api::DeviceState::Idle && s.sleep_timeout_s > 0) {
+            int32_t since_user = ms_since(now, power_last_activity_ms());
+            int32_t since_busy = ms_since(now, last_busy);
+            int32_t idle       = std::max<int32_t>(0, std::min(since_user, since_busy));
+            int32_t left       = static_cast<int32_t>(s.sleep_timeout_s * 1000) - idle;
+            if (left <= 0) {
+                clear_countdown(Countdown::Sleep);
+                if (!power_deep_sleep()) last_busy = now;  // became busy — start over
+            } else if (left <= static_cast<int32_t>(SLEEP_WARNING_S * 1000)) {
+                show_countdown(Countdown::Sleep, left);
+            } else {
+                clear_countdown(Countdown::Sleep);  // the app touched it meanwhile
+            }
+        } else {
+            clear_countdown(Countdown::Sleep);
+        }
+
+        // ── Draw: on change, plus a periodic refresh — never while frozen (§6.2) ──
+        uint32_t refresh_ms = state == api::DeviceState::Live ? LIVE_REFRESH_MS : STATUS_REFRESH_MS;
+        bool     refresh    = !menu.frozen() && now - last_draw >= refresh_ms;
         if (screen_on && (menu.dirty() || refresh || force_draw)) {
             menu.render(fb);
             display_flush(fb);
@@ -165,47 +256,22 @@ static void task_ui(void*) {
             force_draw = false;
         }
 
-        // ── Idle deep sleep (spec §7.1): countdown, warning, sleep ──
-        settings::Settings s = settings_get();
-        if (state != api::DeviceState::Idle) power_note_activity();  // busy counts as activity
-        // Signed: the API may note activity just after `now` was read
-        int32_t  since   = static_cast<int32_t>(now - power_last_activity_ms());
-        uint32_t idle_ms = since > 0 ? static_cast<uint32_t>(since) : 0;
-        if (s.sleep_timeout_s > 0 && idle_ms + SLEEP_WARNING_S * 1000 >= s.sleep_timeout_s * 1000) {
-            uint32_t left_ms = s.sleep_timeout_s * 1000 > idle_ms ? s.sleep_timeout_s * 1000 - idle_ms : 0;
-            if (left_ms == 0) {
-                if (!power_deep_sleep()) power_note_activity();  // became busy — start over
-            } else {
-                if (!screen_on) {
-                    display_set_power(true);
-                    screen_on = true;
-                }
-                uint32_t secs = (left_ms + 999) / 1000;
-                static uint32_t shown = 0;
-                if (!menu.sleep_warning_shown() || secs != shown) menu.show_sleep_warning(secs);
-                shown = secs;
-            }
-        } else if (menu.sleep_warning_shown()) {
-            menu.dismiss_sleep_warning();  // activity elsewhere (e.g. the app) postponed it
+        // ── Screen timeout (idle only — it stays on in live view) and brightness ──
+        if (state == api::DeviceState::Idle && screen_on && !menu.countdown_shown() &&
+            s.screen_timeout_s > 0 && ms_since(now, last_input) >= static_cast<int32_t>(s.screen_timeout_s * 1000)) {
+            display_set_power(false);
+            screen_on = false;
+        }
+        // I2C — only while idle or in live view, to keep the bus quiet while recording
+        if ((state == api::DeviceState::Idle || state == api::DeviceState::Live) && s.brightness != brightness) {
+            brightness = s.brightness;
+            display_set_brightness(brightness);
         }
 
-        // ── Screen timeout and brightness — idle only, to keep I2C quiet while busy ──
-        if (state == api::DeviceState::Idle) {
-            if (screen_on && !menu.sleep_warning_shown() && s.screen_timeout_s > 0 &&
-                now - last_input >= s.screen_timeout_s * 1000) {
-                display_set_power(false);
-                screen_on = false;
-            }
-            if (s.brightness != brightness) {
-                brightness = s.brightness;
-                display_set_brightness(brightness);
-            }
-        }
-
-        // ── LED — blinks during the sleep warning ──
+        // ── LED — blinks during a countdown ──
         bool    low_battery = battery_mv() > 0 && battery_pct() <= ui::LOW_BATTERY_PCT;
         ui::Rgb color       = ui::led_color(state, wifi_ap_client_connected(), low_battery, now);
-        if (menu.sleep_warning_shown() && (now / 250) % 2) color = {0, 0, 0};
+        if (menu.countdown_shown() && (now / 250) % 2) color = {0, 0, 0};
         led_set(color);
 
         vTaskDelay(pdMS_TO_TICKS(UI_TICK_MS));

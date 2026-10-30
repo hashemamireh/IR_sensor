@@ -178,6 +178,9 @@ class MockDeviceTest(unittest.TestCase):
             ("POST", "/api/settings", {"brightness": "low"}),
             ("GET", "/api/calibration", None),
             ("POST", "/api/sleep", None),
+            ("POST", "/api/live/start", None),
+            ("POST", "/api/live/stop", None),
+            ("GET", "/api/live", None),
         ]:
             self.assertEqual(self.request(method, path, body), (409, busy), path)
 
@@ -420,6 +423,167 @@ class MockDeviceTest(unittest.TestCase):
         time.sleep(0.6)
         self.assertEqual(self.request("GET", "/api/status")[0], 200)
 
+    # -- live mode (§3.6)
+
+    def live(self, since=None):
+        path = "/api/live" if since is None else "/api/live?since=%s" % since
+        code, body = self.request("GET", path)
+        self.assertEqual(code, 200, body)
+        return body
+
+    def test_live_mode(self):
+        self.assertEqual(self.request("GET", "/api/live"), (409, {"error": "busy", "state": "idle"}))
+        self.assertEqual(self.request("POST", "/api/live/start"),
+                         (200, {"sample_rate_hz": 10000, "bucket_ms": 20}))
+        status = self.request("GET", "/api/status")[1]
+        self.assertEqual(status["state"], "live")
+        self.assertNotIn("recording", status)
+
+        time.sleep(0.3)  # 3 s of device time = 150 buckets
+        body = self.live(0)
+        self.assertEqual(list(body), ["bucket_ms", "first_seq", "next_seq", "overruns", "buckets"])
+        self.assertEqual((body["bucket_ms"], body["first_seq"], body["overruns"]), (20, 0, 0))
+        n = len(body["buckets"])
+        self.assertGreater(n, 50)
+        self.assertEqual(body["next_seq"], body["first_seq"] + n)
+        for lo, hi, mean in body["buckets"]:
+            self.assertLessEqual(lo, mean)
+            self.assertLessEqual(mean, hi)
+        # baseline ~200, and the 5 ms pulses every 250 ms show up as spikes in max
+        maxes = [b[1] for b in body["buckets"]]
+        self.assertTrue(all(190 <= b[0] <= 210 for b in body["buckets"]))
+        self.assertGreater(sum(1 for m in maxes if m > 2400), n // 15)
+        self.assertGreater(sum(1 for m in maxes if m < 300), n // 2)
+
+        # polling with since=next_seq continues without gaps
+        time.sleep(0.05)
+        nxt = body["next_seq"]
+        body = self.live(nxt)
+        self.assertEqual(body["first_seq"], nxt)
+        # nothing new yet: an empty list, not the whole ring again
+        body = self.live(body["next_seq"])
+        self.assertLessEqual(len(body["buckets"]), 30)
+
+        # gating during live mode
+        busy = {"error": "busy", "state": "live"}
+        for method, path in [("POST", "/api/compress"), ("POST", "/api/live/start"),
+                             ("POST", "/api/record/stop")]:
+            self.assertEqual(self.request(method, path), (409, busy), path)
+        self.assertEqual(self.request("GET", "/api/recordings")[0], 200)
+        self.assertEqual(self.request("POST", "/api/settings", {"brightness": "low"})[0], 200)
+        self.assertEqual(self.request("POST", "/api/time", {"utc_us": 1790000000000000})[0], 200)
+        self.assertEqual(self.request("GET", "/api/calibration")[0], 200)
+
+        self.assertEqual(self.request("POST", "/api/live/stop"), (200, {"stopped": True}))
+        self.assertEqual(self.state(), "idle")
+        self.assertEqual(self.request("POST", "/api/live/stop"),
+                         (409, {"error": "busy", "state": "idle"}))
+        self.assertEqual(self.request("GET", "/api/live")[0], 409)
+
+    def test_live_ring_and_since(self):
+        self.request("POST", "/api/live/start")
+        time.sleep(1.6)  # 16 s of device time: more than the 640-bucket ring holds
+        # The ring keeps moving between requests (500 buckets/s here), so compare
+        # first_seq with the next_seq of the same response
+        def oldest_held(body):
+            return body["next_seq"] - server.LIVE_RING_BUCKETS
+
+        body = self.live()
+        self.assertEqual(len(body["buckets"]), 250)  # at most 250 per response
+        self.assertGreater(body["first_seq"], 0)  # the oldest buckets fell out of the ring
+        self.assertEqual(body["first_seq"], oldest_held(body))  # omitted: oldest held
+        body = self.live(0)  # older than the ring
+        self.assertEqual(body["first_seq"], oldest_held(body))
+        body = self.live(10 ** 30)  # newer than next_seq
+        self.assertEqual(body["first_seq"], oldest_held(body))
+        recent = body["next_seq"] - 100
+        body = self.live(recent)
+        self.assertEqual(body["first_seq"], recent)
+        self.assertEqual(body["buckets"][:100], [server.live_bucket(k) for k in range(
+            recent - self.device.live_start_seq, recent - self.device.live_start_seq + 100)])
+        for bad in ("abc", "", "-1", "1.5", "12x"):
+            self.assertEqual(self.request("GET", "/api/live?since=" + bad),
+                             (400, {"error": "invalid_query", "field": "since"}), bad)
+
+        # sequence numbers continue across sessions; the ring is cleared at start
+        self.request("POST", "/api/live/stop")
+        end = self.device.live_next_seq
+        self.request("POST", "/api/live/start")
+        body = self.live(0)
+        self.assertEqual(body["first_seq"], end)
+        self.assertLess(len(body["buckets"]), 50)
+        self.request("POST", "/api/live/stop")
+
+    def test_record_and_sleep_end_live_mode(self):
+        self.request("POST", "/api/live/start")
+        rec_id = self.record(duration_s=1)
+        self.assertEqual(self.state(), "recording")
+        self.wait_idle()
+        self.assertEqual(self.recordings()[0]["id"], rec_id)
+
+        # As in the firmware: a body that doesn't parse is rejected by the handler and
+        # leaves live mode running; recorder_start ends live mode before validating,
+        # so a recording refused by recording::validate still ends it
+        self.request("POST", "/api/live/start")
+        self.assertEqual(self.request("POST", "/api/record", {"duration_s": 5}),
+                         (400, {"error": "invalid_rate"}))
+        self.assertEqual(self.state(), "live")
+        self.assertEqual(self.request("POST", "/api/record",
+                                      {"duration_s": 999, "sample_rate_hz": 1000}),
+                         (400, {"error": "invalid_duration"}))
+        self.assertEqual(self.state(), "idle")
+        self.request("POST", "/api/live/start")
+
+        self.assertEqual(self.request("POST", "/api/sleep"), (200, {"sleeping": True}))
+        deadline = time.monotonic() + 5
+        while not self.device.asleep and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(self.device.asleep)
+        self.server.wake()
+        self.assertEqual(self.state(), "idle")
+
+    def test_live_timeout(self):
+        self.tearDown()
+        # 100x: the 60 s timeout takes 0.6 s
+        self.start_server(server.Device(time_scale=100, live_timeout=True))
+        self.request("POST", "/api/settings", {"live_timeout_s": 60})
+
+        # polling status and live data doesn't keep it running
+        self.request("POST", "/api/live/start")
+        deadline = time.monotonic() + 3
+        while self.state() == "live" and time.monotonic() < deadline:
+            self.request("GET", "/api/live")
+            time.sleep(0.05)
+        self.assertEqual(self.state(), "idle")
+
+        # other requests do
+        self.request("POST", "/api/live/start")
+        for _ in range(12):
+            self.assertEqual(self.request("GET", "/api/settings")[0], 200)
+            time.sleep(0.1)
+        self.assertEqual(self.state(), "live")
+        self.request("POST", "/api/live/stop")
+
+    def test_live_timeout_off_by_default(self):
+        self.tearDown()
+        self.start_server(server.Device(time_scale=100))
+        self.request("POST", "/api/settings", {"live_timeout_s": 60})
+        self.request("POST", "/api/live/start")
+        time.sleep(1.0)
+        self.assertEqual(self.state(), "live")
+        self.request("POST", "/api/live/stop")
+
+    def test_live_suspends_idle_sleep(self):
+        self.tearDown()
+        # 1000x: the 300 s sleep timeout takes 0.3 s
+        self.start_server(server.Device(time_scale=1000, idle_sleep=True))
+        self.request("POST", "/api/settings", {"sleep_timeout_s": 300})
+        self.request("POST", "/api/live/start")
+        time.sleep(0.8)
+        self.assertFalse(self.device.asleep)
+        self.assertEqual(self.state(), "live")
+        self.request("POST", "/api/live/stop")
+
     # -- time, settings, calibration
 
     def test_time_sync(self):
@@ -452,14 +616,18 @@ class MockDeviceTest(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/settings", {"wifi_ssid": "x"}),
                          (400, {"error": "unknown_setting", "field": "wifi_ssid"}))
         self.assertEqual(server.DEFAULT_SETTINGS["sleep_timeout_s"], 900)
-        self.assertEqual(list(server.DEFAULT_SETTINGS)[-1], "sleep_timeout_s")  # settings.cpp order
-        current = self.request("GET", "/api/settings")[1]
-        for v in (300, 900, 1800, 0):
-            self.assertEqual(self.request("POST", "/api/settings", {"sleep_timeout_s": v}),
-                             (200, dict(current, sleep_timeout_s=v)))
-        for v in (600, -1, "900", None):
-            self.assertEqual(self.request("POST", "/api/settings", {"sleep_timeout_s": v}),
-                             (400, {"error": "invalid_setting", "field": "sleep_timeout_s"}))
+        self.assertEqual(server.DEFAULT_SETTINGS["live_timeout_s"], 300)
+        self.assertEqual(list(server.DEFAULT_SETTINGS)[-2:],  # settings.cpp order
+                         ["sleep_timeout_s", "live_timeout_s"])
+        for key, good, bad in [("sleep_timeout_s", (300, 900, 1800, 0), (600, -1, "900", None)),
+                               ("live_timeout_s", (60, 300, 600, 1800), (0, 120, 3600, "60"))]:
+            current = self.request("GET", "/api/settings")[1]
+            for v in good:
+                self.assertEqual(self.request("POST", "/api/settings", {key: v}),
+                                 (200, dict(current, **{key: v})))
+            for v in bad:
+                self.assertEqual(self.request("POST", "/api/settings", {key: v}),
+                                 (400, {"error": "invalid_setting", "field": key}), (key, v))
         self.assertEqual(self.request("POST", "/api/settings", {"default_sample_rate_hz": 2000})
                          [1]["default_sample_rate_hz"], 2000)
         # all-or-nothing

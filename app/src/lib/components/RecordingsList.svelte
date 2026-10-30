@@ -87,7 +87,7 @@
 <section>
 	<div class="head">
 		<h2>Recordings <span class="muted">{query ? `${rows.length} of ${allRows.length}` : allRows.length}</span></h2>
-		<button class="danger small" disabled={!dev.idle || onDevice.length === 0} onclick={() => (deletingAll = true)}>
+		<button class="danger small" disabled={!dev.ready || onDevice.length === 0} onclick={() => (deletingAll = true)}>
 			Delete all on device
 		</button>
 	</div>
@@ -137,7 +137,7 @@
 						>
 					{/if}
 					{#if row.device && !row.local && dev.downloading !== row.key && (failed || dev.isSkipped(row.key))}
-						<button class="small" disabled={!dev.idle} onclick={() => dev.downloadNow(row.device!)}>
+						<button class="small" disabled={!dev.ready} onclick={() => dev.downloadNow(row.device!)}>
 							{failed ? 'Retry' : 'Download'}
 						</button>
 					{/if}
@@ -157,8 +157,8 @@
 		<div class="choices">
 			{#if row.device}
 				<label class="check">
-					<input type="checkbox" bind:checked={fromDevice} disabled={!dev.idle} />
-					<span>From the device{#if !dev.idle}<span class="muted"> (device busy or offline)</span>{/if}</span>
+					<input type="checkbox" bind:checked={fromDevice} disabled={!dev.ready} />
+					<span>From the device{#if !dev.ready}<span class="muted"> (device busy or offline)</span>{/if}</span>
 				</label>
 			{/if}
 			{#if row.local}
@@ -179,7 +179,7 @@
 			<button onclick={() => (deleting = null)}>Cancel</button>
 			<button
 				class="danger solid"
-				disabled={busy || (!fromDevice && !fromTablet) || (fromDevice && !dev.idle)}
+				disabled={busy || (!fromDevice && !fromTablet) || (fromDevice && !dev.ready)}
 				onclick={confirmDelete}>Delete</button
 			>
 		{/snippet}
@@ -196,7 +196,7 @@
 		{/if}
 		{#snippet actions()}
 			<button onclick={() => (deletingAll = false)}>Cancel</button>
-			<button class="danger solid" disabled={busy || !dev.idle} onclick={confirmDeleteAll}>
+			<button class="danger solid" disabled={busy || !dev.ready} onclick={confirmDeleteAll}>
 				Delete {onDevice.length} from device
 			</button>
 		{/snippet}

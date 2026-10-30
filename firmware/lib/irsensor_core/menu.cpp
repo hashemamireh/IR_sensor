@@ -125,7 +125,7 @@ void Menu::rebuild_top() {
 
 void Menu::reset_home() {
     stack_.clear();
-    sleep_warning_ = false;
+    countdown_ = false;
     push(home_screen());
 }
 
@@ -164,9 +164,15 @@ void Menu::handle(Input in) {
         case Kind::Saving:
             return;
 
+        case Kind::Live:
+            // Press records straight away with the Record menu's settings (§3.6)
+            if (in == Input::Press)          start_recording();
+            else if (in == Input::LongPress) dev_.stop_live();
+            return;
+
         case Kind::Text:
-            if (sleep_warning_) {  // any input means "stay awake"
-                dismiss_sleep_warning();
+            if (countdown_) {  // any input means "keep going"
+                dismiss_countdown();
                 return;
             }
             if (in == Input::Left || in == Input::Right) {
@@ -208,8 +214,13 @@ void Menu::tick() {
             reset_home();
             push(saving_screen());
             break;
+        case api::DeviceState::Live:
+            reset_home();
+            push(live_screen());
+            break;
         case api::DeviceState::Idle:
-            if (before == api::DeviceState::Recording || before == api::DeviceState::Saving) {
+            if (before == api::DeviceState::Recording || before == api::DeviceState::Saving ||
+                before == api::DeviceState::Live) {
                 reset_home();  // home shows the result summary
             } else {
                 rebuild_top();
@@ -234,6 +245,7 @@ Menu::Screen Menu::main_menu() {
     s.title = "Menu";
     s.items = {
         {"Record",     [this] { push(record_menu()); }},
+        {"Live View",  [this] { start_live(); }},
         {"Recordings", [this] { push(recordings_menu()); }},
         {"WiFi",       [this] { push(wifi_menu()); }},
         {"Storage",    [this] { push(storage_menu()); }},
@@ -276,6 +288,11 @@ Menu::Screen Menu::record_menu() {
         };
     };
     return s;
+}
+
+void Menu::start_live() {
+    if (dev_.start_live()) tick();  // switch to the live screen right away
+    else message("Device busy", {"Try again shortly"});
 }
 
 void Menu::start_recording() {
@@ -362,24 +379,25 @@ void Menu::show_wifi_info() {
     push(std::move(s));
 }
 
-void Menu::show_sleep_warning(uint32_t seconds_left) {
-    std::vector<std::string> lines = {fmt("in %u s", u(seconds_left)), "", "Press to stay awake"};
-    if (sleep_warning_) {
+void Menu::show_countdown(const std::string& title, const std::string& hint, uint32_t seconds_left) {
+    std::vector<std::string> lines = {fmt("in %u s", u(seconds_left)), "", hint};
+    if (countdown_) {
+        stack_.back().title = title;
         stack_.back().lines = std::move(lines);
         dirty_ = true;
         return;
     }
     Screen s;
     s.kind  = Kind::Text;
-    s.title = "Going to sleep";
+    s.title = title;
     s.lines = std::move(lines);
     push(std::move(s));
-    sleep_warning_ = true;
+    countdown_ = true;
 }
 
-void Menu::dismiss_sleep_warning() {
-    if (!sleep_warning_) return;
-    sleep_warning_ = false;
+void Menu::dismiss_countdown() {
+    if (!countdown_) return;
+    countdown_ = false;
     pop();
 }
 
@@ -455,6 +473,13 @@ Menu::Screen Menu::settings_menu() {
                     update_settings([v](settings::Settings& s) { s.sleep_timeout_s = v; });
                 }));
             }},
+            {"Live timeout: " + timeout_label(cur.live_timeout_s), [this, cur] {
+                std::vector<Option> options;
+                for (uint32_t t : settings::LIVE_TIMEOUTS_S) options.push_back({timeout_label(t), t});
+                push(choice("Live timeout", options, cur.live_timeout_s, [this](uint32_t v) {
+                    update_settings([v](settings::Settings& s) { s.live_timeout_s = v; });
+                }));
+            }},
         };
     };
     return s;
@@ -485,6 +510,13 @@ Menu::Screen Menu::saving_screen() {
         s.title = fmt("Saving #%u", u(dev_.status().recording_id));
         s.lines = {"Writing to flash..."};
     };
+    return s;
+}
+
+Menu::Screen Menu::live_screen() {
+    Screen s;
+    s.kind  = Kind::Live;
+    s.title = "Live";
     return s;
 }
 
@@ -560,6 +592,32 @@ void Menu::draw_home(Framebuffer& fb, const StatusSnapshot& st) {
     fb.text(0, 56, "Press for menu");
 }
 
+// Big reading and peak on top, a scrolling min/max strip chart below: each
+// pixel column is 100 ms, newest at the right (spec §3.6)
+void Menu::draw_live(Framebuffer& fb) {
+    live::View v = dev_.live_view();
+    if (!v.valid) {
+        fb.text(0, 18, "Live view");
+        fb.text(0, 31, "Starting...");
+        return;
+    }
+    std::string now = fmt("%u", u(v.now));
+    int w = fb.text(0, 17, now.c_str(), true, 2);
+    fb.text(w + 3, 24, v.millivolts ? "mV" : "cnt");
+    std::string peak = fmt("pk %u", u(v.peak));
+    fb.text(Framebuffer::WIDTH - Framebuffer::text_width(peak.c_str()), 17, peak.c_str());
+    fb.text(Framebuffer::WIDTH - Framebuffer::text_width("LIVE"), 25, "LIVE");
+
+    constexpr int TOP = 33, H = Framebuffer::HEIGHT - TOP;
+    const int scale = std::max<int>(v.peak, 50);  // never zoom in further than 50 units full-scale
+    for (size_t i = 0; i < v.columns; i++) {
+        int x    = Framebuffer::WIDTH - static_cast<int>(v.columns) + static_cast<int>(i);
+        int y_hi = TOP + H - 1 - v.col_max[i] * (H - 1) / scale;
+        int y_lo = TOP + H - 1 - v.col_min[i] * (H - 1) / scale;
+        fb.fill_rect(x, y_hi, 1, y_lo - y_hi + 1, true);
+    }
+}
+
 void Menu::render(Framebuffer& fb) {
     fb.clear();
     StatusSnapshot st = dev_.status();
@@ -568,6 +626,11 @@ void Menu::render(Framebuffer& fb) {
     const Screen& s = stack_.back();
     if (s.kind == Kind::Home) {
         draw_home(fb, st);
+        dirty_ = false;
+        return;
+    }
+    if (s.kind == Kind::Live) {
+        draw_live(fb);
         dirty_ = false;
         return;
     }

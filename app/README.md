@@ -24,6 +24,9 @@ Milestone 2 adds:
   and duration.
 - **Names, tags and notes** on tablet recordings, and a search box for the list.
 
+Live view (spec §3.6) shows the sensor continuously without recording: a scrolling
+min/max strip chart with a big current reading and peak, and a Record button.
+
 Measurement cursors wait for the Surface test. Statistics and image export are
 dropped for now.
 
@@ -257,6 +260,27 @@ saves only what you changed. Saving is disabled while the device is busy; nothin
 queued. The Quick Start values only affect the device's own menu, not the app's
 record settings.
 
+### Live view (`src/lib/live.ts`, `src/lib/components/LiveView.svelte`)
+
+- **Starting:** **Live** in the top bar starts live mode, or shows / hides the view while
+  it runs. Live mode started from the device's own menu (or already running when the
+  app connects) opens the view by itself.
+- **Data:** while the device reports `state: "live"`, the app polls
+  `GET /api/live?since=…` about 4×/s. Each 20 ms bucket is [min, max, mean] raw counts.
+  The app keeps 30 s of buckets and draws the min–max band plus the mean, newest at the
+  right (10 s or 30 s window). Missed buckets (`first_seq > since`) leave a break in the
+  chart, and the device's dropped-sample count shows as a badge.
+- **Reading:** "Now" is the mean of the last 100 ms (as on the OLED); "Peak" is the
+  highest max in the window. mV through this connection's calibration table, else counts.
+- **Record** uses the Record popover's rate and duration; the device ends live mode
+  first, and the view closes.
+- **Ending:** polling doesn't count as activity, so live mode ends after the device's
+  Live timeout (Device Settings) unless you do something. When it ends from the device
+  (timeout, its button, another client) the view keeps the last readings and offers
+  **Restart live view**.
+- **Allowed during live mode:** manual downloads, deletes and settings. Auto-downloads
+  wait until the device is idle, because flash reads can make live mode drop samples.
+
 ### Times
 
 Device times are UTC. The app shows them in local time, with UTC on hover. A
@@ -276,6 +300,7 @@ These can only be checked on the real tablet. Please report back:
 - [ ] With 3–8 long recordings overlaid, zoom and pan still feel smooth.
 - [ ] The legend chips (hide/show, − / + offset, ✕) are big enough to tap.
 - [ ] Export of a long recording to CSV finishes, and the file opens.
+- [ ] Live view: the strip chart scrolls smoothly and the big reading is readable at arm's length.
 - [ ] The Record, Device Settings, Export and Device popovers open and close comfortably by touch (tap outside closes them).
 
 ## Layout
@@ -293,6 +318,8 @@ app/
 │   ├── graphView.ts         uPlot wrapper (several traces) + gestures
 │   ├── align.ts             overlay alignment: start, first edge, manual offset
 │   ├── export.ts            CSV / JSON export, chunked, optional averaging
+│   ├── live.ts              live-mode bucket buffer: gaps, reading, peak, chart data
+│   ├── recordSettings.svelte.ts  record rate / duration, shared and remembered
 │   ├── exportFile.ts        Save dialog + streaming the export to disk
 │   ├── format.ts            local time, sizes, rates
 │   ├── components/          StatusBar, RecordPanel, RecordingsList, Graph, …

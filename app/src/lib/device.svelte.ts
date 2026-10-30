@@ -15,6 +15,7 @@ import { SvelteSet } from 'svelte/reactivity';
 import { ApiError, DeviceApi, type Calibration, type DeviceRecording, type DeviceSettings, type Status } from './api';
 import { errorText } from './format';
 import { parseIrec } from './irec';
+import { LiveBuffer } from './live';
 import { missingLocally, recordingKey, type LocalRecording } from './recordings';
 import type { LocalStore } from './storage';
 
@@ -27,6 +28,9 @@ const POLL_MS = 1000;
 const POLL_OFFLINE_MS = 2000;
 /** Consecutive failed polls before the device counts as gone */
 const FAILURES_UNTIL_UNREACHABLE = 2;
+/** Live mode (spec §3.6): poll ~4×/s, keep 30 s of 20 ms buckets */
+const LIVE_POLL_MS = 250;
+const LIVE_HISTORY_BUCKETS = 1500;
 /** Network-error attempts per download before waiting for a manual retry */
 const DOWNLOAD_ATTEMPTS = 3;
 
@@ -72,6 +76,22 @@ export class DeviceController {
 	notice = $state<Notice | null>(null);
 	/** Set when a recording started from the app has downloaded; the page opens it */
 	autoOpen = $state<string | null>(null);
+	/** The device's raw → mV table for this connection, for live values; null = counts */
+	calibrationLut = $state.raw<Float32Array | null>(null);
+
+	// Live mode: the buffer isn't reactive itself; liveVersion bumps on every poll
+	readonly liveBuffer = new LiveBuffer(LIVE_HISTORY_BUCKETS);
+	liveVersion = $state(0);
+	/** Counts each time the device enters live mode, so the page can open the view */
+	liveSession = $state(0);
+	/**
+	 * Why the last live session ended, once it has: 'stopped' from the app,
+	 * 'recording' (a recording started, from the app or the device),
+	 * 'record-refused' (the app asked to record; the device ends live mode before it
+	 * validates, so a refused recording still ends it), or 'ended' (timeout, the
+	 * device's button, another client, or the device going away)
+	 */
+	liveEnded = $state<'stopped' | 'recording' | 'record-refused' | 'ended' | null>(null);
 
 	private api = new DeviceApi(this.baseUrl);
 	private queue: Promise<unknown> = Promise.resolve();
@@ -86,6 +106,9 @@ export class DeviceController {
 	private skipAuto = new SvelteSet<string>(JSON.parse(stored('irsensor.skipAutoDownload', '[]')));
 	private running = false;
 	private openWhenDownloaded: { ssid: string; id: number } | null = null;
+	private livePolling = false;
+	private liveStopRequested = false;
+	private liveRecordRequested = false;
 
 	constructor(readonly local: LocalStore) {}
 
@@ -99,6 +122,15 @@ export class DeviceController {
 
 	get idle() {
 		return this.online && this.status?.state === 'idle';
+	}
+
+	/** Idle or live: live mode allows downloads, deletes, settings and recording (§8.2) */
+	get ready() {
+		return this.online && (this.status?.state === 'idle' || this.status?.state === 'live');
+	}
+
+	get live() {
+		return this.online && this.status?.state === 'live';
 	}
 
 	async start() {
@@ -184,13 +216,41 @@ export class DeviceController {
 		// The list may have changed: a recording finished (or was discarded), or
 		// someone used the device menu
 		if (prev && (prev.state !== s.state || prev.recording_count !== s.recording_count)) this.needsList = true;
-		if (s.state === 'idle') void this.idleWork();
+		this.followLive(prev?.state === 'live', s.state);
+		if (s.state === 'idle' || s.state === 'live') void this.idleWork();
+	}
+
+	private followLive(wasLive: boolean, state: Status['state']) {
+		if (state === 'live') {
+			if (!wasLive) {
+				this.liveStopRequested = this.liveRecordRequested = false;
+				this.liveBuffer.clear();
+				this.liveVersion++;
+				this.liveEnded = null;
+				this.liveSession++;
+			}
+			void this.livePoll();
+		} else if (wasLive) {
+			this.liveEnded =
+				state === 'recording' || state === 'saving'
+					? 'recording'
+					: this.liveStopRequested
+						? 'stopped'
+						: this.liveRecordRequested
+							? 'record-refused'
+							: 'ended';
+			this.liveStopRequested = false;
+			this.liveRecordRequested = false;
+		}
 	}
 
 	private onStatusFailed(message: string | null) {
 		this.failures++;
 		if (this.connection === 'connecting' || this.failures >= FAILURES_UNTIL_UNREACHABLE) {
-			if (this.connection !== 'unreachable') this.resetSession();
+			if (this.connection !== 'unreachable') {
+				this.resetSession();
+				if (this.status?.state === 'live') this.liveEnded = 'ended';
+			}
 			this.connection = 'unreachable';
 			if (message) this.notice = { kind: 'error', text: message };
 			else if (this.notice?.kind === 'info') this.notice = null;
@@ -204,12 +264,49 @@ export class DeviceController {
 		this.deviceRecordings = null;
 		this.calibrationChecked = false;
 		this.calibrationTable = null;
+		this.calibrationLut = null;
 		this.calibration = 'unknown';
 		this.attempts.clear();
 		this.failed = {};
 	}
 
-	// ── Background work while idle ──────────────────────────────────────────
+	// ── Live mode ───────────────────────────────────────────────────────────
+
+	/** Polls GET /api/live while the device reports live mode; one loop at a time */
+	private async livePoll() {
+		if (this.livePolling) return;
+		this.livePolling = true;
+		const gen = this.generation;
+		try {
+			while (gen === this.generation && this.live) {
+				try {
+					const r = await this.exclusive((api) => api.getLive(this.liveBuffer.nextSeq ?? undefined));
+					if (gen !== this.generation) break;
+					this.liveBuffer.append(r);
+					this.liveVersion++;
+				} catch (e) {
+					if (e instanceof ApiError && e.busy) break; // not live any more
+					// Network errors: the status poll decides about the connection
+				}
+				await sleep(LIVE_POLL_MS);
+			}
+		} finally {
+			this.livePolling = false;
+		}
+	}
+
+	startLive() {
+		return this.act("Couldn't start live view", (api) => api.startLive());
+	}
+
+	async stopLive() {
+		this.liveStopRequested = true;
+		const r = await this.act("Couldn't stop live view", (api) => api.stopLive());
+		if (!r) this.liveStopRequested = false;
+		return r;
+	}
+
+	// ── Background work while idle (and the parts that are safe in live mode) ──
 
 	private async idleWork() {
 		if (this.idleWorkRunning) return;
@@ -251,6 +348,7 @@ export class DeviceController {
 			const cal = await this.exclusive((api) => api.calibration());
 			if (cal.mv?.length === 4096) {
 				this.calibrationTable = cal;
+				this.calibrationLut = Float32Array.from(cal.mv);
 				this.calibration = 'ok';
 				await this.local.saveCalibration(ssid, cal);
 			}
@@ -259,6 +357,7 @@ export class DeviceController {
 			// 503 calibration_unavailable (or similar): fall back to a table saved on an
 			// earlier connection, else raw counts
 			this.calibrationTable = await this.local.loadCalibration(ssid);
+			this.calibrationLut = this.calibrationTable ? Float32Array.from(this.calibrationTable.mv) : null;
 			this.calibration = this.calibrationTable ? 'ok' : 'unavailable';
 		}
 		this.calibrationChecked = true;
@@ -341,6 +440,7 @@ export class DeviceController {
 
 	async startRecording(durationS: number, sampleRateHz: number) {
 		const ssid = this.ssid;
+		if (this.live) this.liveRecordRequested = true;
 		const r = await this.act("Couldn't start recording", (api) => api.startRecording(durationS, sampleRateHz));
 		if (r && ssid) this.openWhenDownloaded = { ssid, id: r.id };
 		return r;

@@ -17,6 +17,7 @@
 #include "encoder.h"
 #include "led.h"
 #include "pins.h"
+#include "recorder.h"
 #include "wifi_ap.h"
 
 static const char* TAG = "power";
@@ -68,6 +69,9 @@ void power_check_wake() {
 }
 
 bool power_deep_sleep() {
+    // Sleeping from live view ends it first
+    if (!live_stop_and_wait()) return false;
+
     // Held until sleep (never released), so nothing else touches flash meanwhile
     DeviceLock lock(pdMS_TO_TICKS(200));
     if (!lock.held() || device_state() != api::DeviceState::Idle) return false;

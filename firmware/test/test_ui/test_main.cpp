@@ -47,6 +47,16 @@ static void test_glyph_shape() {
     for (int y = 0; y < 7; y++) TEST_ASSERT_TRUE(fb.pixel(8, y));
 }
 
+static void test_scaled_text() {
+    Framebuffer fb;
+    TEST_ASSERT_EQUAL_INT(12, fb.text(0, 0, "1", true, 2));
+    TEST_ASSERT_EQUAL_INT(24, Framebuffer::text_width("12", 2));
+    // '1' stroke is column 2 at scale 1 → columns 4–5 at scale 2, rows 0–13
+    TEST_ASSERT_TRUE(fb.pixel(4, 0));
+    TEST_ASSERT_TRUE(fb.pixel(5, 13));
+    TEST_ASSERT_FALSE(fb.pixel(4, 14));
+}
+
 static void test_inverted_text() {
     Framebuffer fb;
     fb.fill_rect(0, 0, 6, 8, true);
@@ -102,6 +112,10 @@ static void test_led_colors() {
     ui::Rgb bright = ui::led_color(DeviceState::Recording, true, true, ui::PULSE_PERIOD_MS / 2);
     TEST_ASSERT_TRUE(dim.g == 0 && dim.b == 0 && bright.g == 0 && bright.b == 0);
     TEST_ASSERT_TRUE(bright.r > dim.r);  // pulsing red
+
+    ui::Rgb live_dim    = ui::led_color(DeviceState::Live, false, false, 0);
+    ui::Rgb live_bright = ui::led_color(DeviceState::Live, false, false, ui::PULSE_PERIOD_MS / 2);
+    TEST_ASSERT_TRUE(live_bright.g > live_dim.g && live_bright.r == 0);  // pulsing green
 }
 
 int main() {
@@ -109,6 +123,7 @@ int main() {
     RUN_TEST(test_page_layout);
     RUN_TEST(test_clipping);
     RUN_TEST(test_glyph_shape);
+    RUN_TEST(test_scaled_text);
     RUN_TEST(test_inverted_text);
     RUN_TEST(test_short_press_fires_on_release);
     RUN_TEST(test_bounce_is_ignored);

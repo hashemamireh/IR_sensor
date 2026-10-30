@@ -74,9 +74,11 @@ void battery_read_now() {
 static void task_battery_monitor(void* arg) {
     vTaskDelay(pdMS_TO_TICKS(FIRST_READ_DELAY_MS));
     for (;;) {
-        // Deferred while busy to keep the I2C bus quiet (spec §5.3); the
-        // recorder reads right before and after instead
-        if (device_state() == api::DeviceState::Idle) battery_read_now();
+        // Deferred while recording/saving/compressing to keep the I2C bus quiet
+        // (spec §5.3); the recorder reads right before and after instead. Live
+        // view keeps reading — it can run for 30 min
+        api::DeviceState s = device_state();
+        if (s == api::DeviceState::Idle || s == api::DeviceState::Live) battery_read_now();
         vTaskDelay(pdMS_TO_TICKS(BATTERY_READ_INTERVAL_MS));
     }
 }

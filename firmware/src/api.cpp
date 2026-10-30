@@ -16,6 +16,7 @@
 #include "config.h"
 #include "device_state.h"
 #include "json_writer.h"
+#include "live.h"
 #include "power.h"
 #include "recorder.h"
 #include "recording.h"
@@ -370,6 +371,9 @@ static esp_err_t handle_settings_set(httpd_req_t* req) {
         } else if (strcmp(key, "sleep_timeout_s") == 0) {
             ok = get_uint(item, UINT32_MAX, &v) && settings::is_valid_sleep_timeout(v);
             s.sleep_timeout_s = v;
+        } else if (strcmp(key, "live_timeout_s") == 0) {
+            ok = get_uint(item, UINT32_MAX, &v) && settings::is_valid_live_timeout(v);
+            s.live_timeout_s = v;
         } else {
             bad_key = key;
             error   = "unknown_setting";
@@ -423,6 +427,55 @@ static esp_err_t handle_sleep(httpd_req_t* req) {
     return err;
 }
 
+// ── Live view (spec §3.6) ───────────────────────────────────────────────────
+
+static esp_err_t handle_live_start(httpd_req_t* req) {
+    if (!api::route_allowed(device_state(), Route::LiveStart) || !live_start()) return send_busy(req);
+
+    char buf[64];
+    JsonWriter w(buf, sizeof(buf));
+    w.begin_object()
+        .key("sample_rate_hz").num(live::SAMPLE_RATE_HZ)
+        .key("bucket_ms").num(live::BUCKET_MS)
+     .end_object();
+    return send_json(req, "200 OK", w);
+}
+
+static esp_err_t handle_live_stop(httpd_req_t* req) {
+    if (!api::route_allowed(device_state(), Route::LiveStop)) return send_busy(req);
+    live_stop();
+
+    char buf[32];
+    JsonWriter w(buf, sizeof(buf));
+    w.begin_object().key("stopped").boolean(true).end_object();
+    return send_json(req, "200 OK", w);
+}
+
+// GET /api/live?since=N — the buckets from N on (at most live::MAX_PER_READ).
+// Polled like /api/status, so it doesn't count as activity.
+static esp_err_t handle_live_data(httpd_req_t* req) {
+    if (!api::route_allowed(device_state(), Route::LiveData)) return send_busy(req);
+
+    uint64_t since = 0;
+    char query[48], value[24];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+        httpd_query_key_value(query, "since", value, sizeof(value)) == ESP_OK) {
+        char* end = nullptr;
+        since = strtoull(value, &end, 10);
+        if (end == value || *end != '\0') return send_error(req, "400 Bad Request", "invalid_query", "since");
+    }
+
+    // httpd handles one request at a time, so these can be static
+    static live::Bucket buckets[live::MAX_PER_READ];
+    static char         buf[live::MAX_PER_READ * 18 + 128];  // "[4095,4095,4095]," per bucket
+    uint64_t first = 0, next = 0;
+    size_t   n = live_read(since, buckets, live::MAX_PER_READ, &first, &next);
+
+    JsonWriter w(buf, sizeof(buf));
+    live::write_json(w, first, buckets, n, next, live_overruns());
+    return send_json(req, "200 OK", w);
+}
+
 // ── GET /api/calibration ────────────────────────────────────────────────────
 
 static esp_err_t handle_calibration(httpd_req_t* req) {
@@ -466,7 +519,7 @@ static esp_err_t with_activity(httpd_req_t* req) {
 
 void api_start() {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_uri_handlers = 16;
+    cfg.max_uri_handlers = 20;
     cfg.uri_match_fn     = httpd_uri_match_wildcard;  // for /api/recordings/*
     cfg.stack_size       = 8192;                      // cJSON + request body buffer
     cfg.lru_purge_enable = true;                      // recycle sockets the tablet abandoned
@@ -490,6 +543,9 @@ void api_start() {
         {.uri = "/api/calibration",  .method = HTTP_GET,    ACTIVE(handle_calibration)},
         {.uri = "/api/compress",     .method = HTTP_POST,   ACTIVE(handle_compress)},
         {.uri = "/api/sleep",        .method = HTTP_POST,   ACTIVE(handle_sleep)},
+        {.uri = "/api/live/start",   .method = HTTP_POST,   ACTIVE(handle_live_start)},
+        {.uri = "/api/live/stop",    .method = HTTP_POST,   ACTIVE(handle_live_stop)},
+        {.uri = "/api/live",         .method = HTTP_GET,    .handler = handle_live_data, .user_ctx = nullptr},
     };
     for (const auto& r : routes) {
         ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &r));

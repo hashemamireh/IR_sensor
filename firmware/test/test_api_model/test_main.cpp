@@ -32,6 +32,23 @@ static void test_busy_states_allow_only_status_settings_get_and_stop() {
     TEST_ASSERT_FALSE(api::route_allowed(DeviceState::Saving, Route::RecordStop));
 }
 
+static void test_live_allows_most_but_not_compress() {
+    DeviceState s = DeviceState::Live;
+    TEST_ASSERT_TRUE(api::route_allowed(s, Route::LiveData));
+    TEST_ASSERT_TRUE(api::route_allowed(s, Route::LiveStop));
+    TEST_ASSERT_TRUE(api::route_allowed(s, Route::RecordStart));
+    TEST_ASSERT_TRUE(api::route_allowed(s, Route::RecordingGet));
+    TEST_ASSERT_TRUE(api::route_allowed(s, Route::SettingsSet));
+    TEST_ASSERT_TRUE(api::route_allowed(s, Route::Sleep));
+    TEST_ASSERT_FALSE(api::route_allowed(s, Route::Compress));
+    TEST_ASSERT_FALSE(api::route_allowed(s, Route::LiveStart));
+    TEST_ASSERT_FALSE(api::route_allowed(s, Route::RecordStop));
+    TEST_ASSERT_FALSE(api::route_allowed(DeviceState::Idle, Route::LiveData));
+    TEST_ASSERT_TRUE(api::route_allowed(DeviceState::Idle, Route::LiveStart));
+    TEST_ASSERT_FALSE(api::route_allowed(DeviceState::Recording, Route::LiveStart));
+    TEST_ASSERT_EQUAL_STRING("live", api::state_str(s));
+}
+
 static void test_status_idle() {
     api::StatusInfo s;
     s.battery_mv = 3900;
@@ -122,6 +139,7 @@ int main() {
     UNITY_BEGIN();
     RUN_TEST(test_idle_allows_everything_but_stop);
     RUN_TEST(test_busy_states_allow_only_status_settings_get_and_stop);
+    RUN_TEST(test_live_allows_most_but_not_compress);
     RUN_TEST(test_status_idle);
     RUN_TEST(test_status_recording_and_compressing);
     RUN_TEST(test_recording_entry);

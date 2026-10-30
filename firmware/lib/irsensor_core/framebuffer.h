@@ -25,8 +25,8 @@ public:
 
     // Draws ASCII text with its top-left corner at (x, y); `on` = ink colour,
     // so on=false draws dark text on a filled bar. Returns the width drawn.
-    int text(int x, int y, const char* s, bool on = true);
-    static int text_width(const char* s);
+    int text(int x, int y, const char* s, bool on = true, int scale = 1);
+    static int text_width(const char* s, int scale = 1);
 
     const uint8_t* data() const { return buf_; }
     static constexpr size_t SIZE = WIDTH * HEIGHT / 8;

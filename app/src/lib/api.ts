@@ -2,7 +2,7 @@
 // api_model.cpp, which the mock (tools/mock_device) copies.
 import { fetchWithTimeout } from './http';
 
-export type DeviceState = 'idle' | 'recording' | 'saving' | 'compressing';
+export type DeviceState = 'idle' | 'recording' | 'saving' | 'compressing' | 'live';
 
 export interface Status {
 	state: DeviceState;
@@ -46,6 +46,20 @@ export interface DeviceSettings {
 	/** Idle time before the device deep-sleeps by itself (spec §7.1); 0 = never.
 	 *  Any request except GET /api/status counts as activity. */
 	sleep_timeout_s: 300 | 900 | 1800 | 0;
+	/** Live mode ends after this long without real activity (spec §3.6) */
+	live_timeout_s: 60 | 300 | 600 | 1800;
+}
+
+/** GET /api/live: 20 ms buckets of [min, max, mean] raw counts, oldest first (spec §3.6) */
+export interface LiveResponse {
+	bucket_ms: number;
+	/** Sequence number of buckets[0]; greater than `since` means buckets were missed */
+	first_seq: number;
+	/** Poll next with since=next_seq */
+	next_seq: number;
+	/** Samples the device dropped during this live session (e.g. during flash work) */
+	overruns: number;
+	buckets: [number, number, number][];
 }
 
 export const SAMPLE_RATES_HZ = [1000, 2000, 5000, 10000, 20000] as const;
@@ -78,6 +92,7 @@ const MESSAGES: Record<string, string> = {
 	calibration_unavailable: 'This chip has no ADC calibration data',
 	confirmation_required: 'The device asked for confirmation',
 	invalid_setting: 'The device rejected a setting',
+	invalid_query: 'The device rejected a query parameter',
 	unknown_setting: "The device doesn't know a setting",
 };
 
@@ -177,6 +192,21 @@ export class DeviceApi {
 	/** Any subset of keys; all or nothing. 409 unless idle (NVS write). */
 	setSettings(changes: Partial<DeviceSettings>) {
 		return this.json<DeviceSettings>('POST', '/api/settings', changes);
+	}
+
+	/** Only while idle; the device answers with its live sampling parameters */
+	startLive() {
+		return this.json<{ sample_rate_hz: number; bucket_ms: number }>('POST', '/api/live/start');
+	}
+
+	/** Only during live mode */
+	stopLive() {
+		return this.json<{ stopped: boolean }>('POST', '/api/live/stop');
+	}
+
+	/** Buckets from `since` on; omit it to get everything the device's ring holds */
+	getLive(since?: number) {
+		return this.json<LiveResponse>('GET', since === undefined ? '/api/live' : `/api/live?since=${since}`);
 	}
 
 	calibration() {

@@ -22,6 +22,7 @@
 #include "config.h"
 #include "device_state.h"
 #include "irec.h"
+#include "live.h"
 #include "pins.h"
 #include "recording.h"
 #include "recordings.h"
@@ -30,7 +31,10 @@
 
 static const char* TAG = "recorder";
 
+enum class JobKind : uint8_t { Record, Live };
+
 struct Job {
+    JobKind  kind;
     uint32_t id;
     uint32_t rate_hz;
     uint32_t duration_s;
@@ -49,6 +53,7 @@ static Job                   current{};  // written before the job is queued
 static std::atomic<bool>     stop_requested{false};
 static std::atomic<uint32_t> samples_captured{0};
 static std::atomic<bool>     pool_overflowed{false};
+static std::atomic<uint32_t> pool_overflows{0};  // running count, for live view
 static recording::Outcome    last_outcome;
 static portMUX_TYPE          outcome_lock = portMUX_INITIALIZER_UNLOCKED;
 
@@ -57,6 +62,12 @@ static portMUX_TYPE          outcome_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint8_t               frame[ADC_FRAME_BYTES];
 static adc_continuous_data_t parsed[ADC_FRAME_BYTES / SOC_ADC_DIGI_RESULT_BYTES];
 static uint8_t               staging[SAVE_CHUNK_BYTES];
+
+// Live view (spec §3.6)
+static live::Ring            ring;
+static portMUX_TYPE          ring_lock = portMUX_INITIALIZER_UNLOCKED;
+static std::atomic<bool>     live_stop_requested{false};
+static uint32_t              live_overrun_base = 0;
 
 // ── Capture ─────────────────────────────────────────────────────────────────
 
@@ -68,14 +79,24 @@ static bool IRAM_ATTR on_conv_done(adc_continuous_handle_t, const adc_continuous
 
 static bool IRAM_ATTR on_pool_ovf(adc_continuous_handle_t, const adc_continuous_evt_data_t*, void*) {
     pool_overflowed = true;
+    pool_overflows.fetch_add(1);
     return false;
 }
 
+struct AdcRun {
+    bool     started;
+    bool     timed_out;
+    uint32_t invalid;
+};
+
 #ifndef IRSENSOR_SYNTHETIC_ADC
 
-static Capture capture(const Job& job) {
-    const uint32_t target = job.rate_hz * job.duration_s;
-    Capture c{0, false};
+// Runs the ADC at `rate_hz` and hands every sample to `sink` until the sink
+// returns false, `stop` is set, or `deadline_us` passes (0 = no deadline).
+// Shared by recording and live view.
+template <typename Sink>
+static AdcRun run_adc(uint32_t rate_hz, const std::atomic<bool>& stop, int64_t deadline_us, Sink&& sink) {
+    AdcRun r{false, false, 0};
 
     adc_continuous_handle_t adc = nullptr;
     adc_continuous_handle_cfg_t handle_cfg = {
@@ -92,7 +113,7 @@ static Capture capture(const Job& job) {
     adc_continuous_config_t cfg = {
         .pattern_num    = 1,
         .adc_pattern    = &pattern,
-        .sample_freq_hz = job.rate_hz,
+        .sample_freq_hz = rate_hz,
         .conv_mode      = ADC_CONV_SINGLE_UNIT_1,
         .format         = ADC_DIGI_OUTPUT_FORMAT_TYPE2,
     };
@@ -112,63 +133,101 @@ static Capture capture(const Job& job) {
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "ADC setup failed: %s", esp_err_to_name(err));
         if (adc) adc_continuous_deinit(adc);
-        return c;
+        return r;
     }
+    r.started = true;
 
-    uint32_t invalid = 0;
-    const int64_t deadline = esp_timer_get_time() + (int64_t)(job.duration_s + 2) * 1000000;
-
-    while (c.count < target && !stop_requested) {
+    bool more = true;
+    while (more && !stop) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
 
         // Drain every frame that's ready
         uint32_t len = 0;
-        while (c.count < target && adc_continuous_read(adc, frame, sizeof(frame), &len, 0) == ESP_OK) {
+        while (more && adc_continuous_read(adc, frame, sizeof(frame), &len, 0) == ESP_OK) {
             uint32_t n = 0;
             adc_continuous_parse_data(adc, frame, len, parsed, &n);
-            for (uint32_t i = 0; i < n && c.count < target; i++) {
-                if (parsed[i].valid) buffer[c.count++] = static_cast<uint16_t>(parsed[i].raw_data);
-                else invalid++;
+            for (uint32_t i = 0; i < n && more; i++) {
+                if (parsed[i].valid) more = sink(static_cast<uint16_t>(parsed[i].raw_data));
+                else r.invalid++;
             }
         }
-        samples_captured = c.count;
-
-        if (esp_timer_get_time() > deadline) {
-            ESP_LOGE(TAG, "ADC delivered %lu of %lu samples in time — stopping",
-                     (unsigned long)c.count, (unsigned long)target);
+        if (deadline_us && esp_timer_get_time() > deadline_us) {
+            r.timed_out = true;
             break;
         }
     }
 
     adc_continuous_stop(adc);
     adc_continuous_deinit(adc);
-
-    if (invalid) ESP_LOGW(TAG, "%lu invalid ADC results dropped", (unsigned long)invalid);
-    c.overrun = pool_overflowed || invalid > 0;
-    return c;
+    return r;
 }
 
 #else  // IRSENSOR_SYNTHETIC_ADC
 
-// Generates samples at the requested rate instead of reading the ADC
-static Capture capture(const Job& job) {
-    const uint32_t target = job.rate_hz * job.duration_s;
-    Capture c{0, false};
-    const int64_t t0 = esp_timer_get_time();
-
-    while (c.count < target && !stop_requested) {
+// Generates the synthetic signal at `rate_hz` instead of reading the ADC
+template <typename Sink>
+static AdcRun run_adc(uint32_t rate_hz, const std::atomic<bool>& stop, int64_t deadline_us, Sink&& sink) {
+    (void)deadline_us;
+    const int64_t t0   = esp_timer_get_time();
+    uint64_t      next = 0;
+    bool          more = true;
+    pool_overflowed    = false;
+    while (more && !stop) {
         vTaskDelay(pdMS_TO_TICKS(10));
-        uint64_t due = static_cast<uint64_t>(esp_timer_get_time() - t0) * job.rate_hz / 1000000;
-        while (c.count < target && c.count < due) {
-            buffer[c.count] = synthetic::sample(c.count, job.rate_hz);
-            c.count++;
-        }
-        samples_captured = c.count;
+        uint64_t due = static_cast<uint64_t>(esp_timer_get_time() - t0) * rate_hz / 1000000;
+        while (more && next < due) more = sink(synthetic::sample(next++, rate_hz));
     }
-    return c;
+    return {true, false, 0};
 }
 
 #endif
+
+static Capture capture(const Job& job) {
+    const uint32_t target = job.rate_hz * job.duration_s;
+    Capture c{0, false};
+    const int64_t deadline = esp_timer_get_time() + (int64_t)(job.duration_s + 2) * 1000000;
+
+    AdcRun r = run_adc(job.rate_hz, stop_requested, deadline, [&](uint16_t v) {
+        buffer[c.count++] = v;
+        samples_captured  = c.count;
+        return c.count < target;
+    });
+    if (!r.started) return c;
+
+    if (r.timed_out) {
+        ESP_LOGE(TAG, "ADC delivered %lu of %lu samples in time — stopping",
+                 (unsigned long)c.count, (unsigned long)target);
+    }
+    if (r.invalid) ESP_LOGW(TAG, "%lu invalid ADC results dropped", (unsigned long)r.invalid);
+    c.overrun = pool_overflowed || r.invalid > 0;
+    return c;
+}
+
+// Live view: full-rate sampling reduced to min/max/mean buckets in the ring,
+// until live_stop() (spec §3.6). Nothing is stored.
+static void run_live() {
+    taskENTER_CRITICAL(&ring_lock);
+    ring.clear();
+    taskEXIT_CRITICAL(&ring_lock);
+    live_overrun_base = pool_overflows.load();
+    ESP_LOGI(TAG, "Live view started (%lu Hz, %lu ms buckets)", (unsigned long)live::SAMPLE_RATE_HZ,
+             (unsigned long)live::BUCKET_MS);
+
+    live::Accumulator acc;
+    run_adc(live::SAMPLE_RATE_HZ, live_stop_requested, 0, [&](uint16_t v) {
+        if (acc.add(v)) {
+            live::Bucket b = acc.take();
+            taskENTER_CRITICAL(&ring_lock);
+            ring.push(b);
+            taskEXIT_CRITICAL(&ring_lock);
+        }
+        return true;
+    });
+
+    ESP_LOGI(TAG, "Live view stopped");
+    DeviceLock lock;
+    device_set_state(api::DeviceState::Idle);
+}
 
 // ── Save ────────────────────────────────────────────────────────────────────
 
@@ -269,21 +328,35 @@ static void run(const Job& job) {
 static void task_recorder(void*) {
     Job job;
     for (;;) {
-        if (xQueueReceive(jobs, &job, portMAX_DELAY) == pdTRUE) run(job);
+        if (xQueueReceive(jobs, &job, portMAX_DELAY) != pdTRUE) continue;
+        if (job.kind == JobKind::Live) run_live();
+        else run(job);
     }
+}
+
+// Asks live view to end and waits for the ADC to be released
+static bool end_live(uint32_t timeout_ms) {
+    if (device_state() != api::DeviceState::Live) return true;
+    live_stop_requested = true;
+    for (uint32_t waited = 0; waited < timeout_ms; waited += 10) {
+        if (device_state() != api::DeviceState::Live) return true;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    return false;
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
 void recorder_init() {
+    jobs = xQueueCreate(1, sizeof(Job));
+    xTaskCreate(task_recorder, "recorder", 4096, nullptr, RECORDER_CAPTURE_PRIORITY, &task);
+
     const size_t bytes = recording::max_buffer_bytes();
     buffer = static_cast<uint16_t*>(heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM));
     if (!buffer) {
         ESP_LOGE(TAG, "Can't reserve %u bytes of PSRAM — recording disabled", (unsigned)bytes);
         return;
     }
-    jobs = xQueueCreate(1, sizeof(Job));
-    xTaskCreate(task_recorder, "recorder", 4096, nullptr, RECORDER_CAPTURE_PRIORITY, &task);
 
 #ifdef IRSENSOR_SYNTHETIC_ADC
     ESP_LOGW(TAG, "SYNTHETIC build — recordings contain generated samples, not ADC data");
@@ -292,6 +365,9 @@ void recorder_init() {
 }
 
 StartResult recorder_start(uint32_t rate_hz, uint32_t duration_s, uint32_t* id) {
+    // Recording from live view ends it first (spec §3.6)
+    if (!end_live(1000)) return StartResult::Busy;
+
     // Short wait: a download in progress holds the lock for the whole transfer
     DeviceLock lock(pdMS_TO_TICKS(200));
     if (!lock.held() || device_state() != api::DeviceState::Idle) return StartResult::Busy;
@@ -311,7 +387,7 @@ StartResult recorder_start(uint32_t rate_hz, uint32_t duration_s, uint32_t* id) 
 
     battery_read_now();  // last reading before battery reads pause (spec §5.3)
 
-    current          = {new_id, rate_hz, duration_s};
+    current          = {JobKind::Record, new_id, rate_hz, duration_s};
     samples_captured = 0;
     stop_requested   = false;
     device_set_state(api::DeviceState::Recording);
@@ -341,3 +417,39 @@ recording::Outcome recorder_last_outcome() {
     taskEXIT_CRITICAL(&outcome_lock);
     return o;
 }
+
+// ── Live view ───────────────────────────────────────────────────────────────
+
+bool live_start() {
+    DeviceLock lock(pdMS_TO_TICKS(200));
+    if (!lock.held() || device_state() != api::DeviceState::Idle) return false;
+    live_stop_requested = false;
+    device_set_state(api::DeviceState::Live);
+    Job job{JobKind::Live, 0, 0, 0};
+    xQueueSend(jobs, &job, 0);
+    return true;
+}
+
+void live_stop() {
+    if (device_state() == api::DeviceState::Live) live_stop_requested = true;
+}
+
+bool live_stop_and_wait() { return end_live(1000); }
+
+size_t live_read(uint64_t since, live::Bucket* out, size_t max, uint64_t* first, uint64_t* next) {
+    taskENTER_CRITICAL(&ring_lock);
+    size_t n = ring.read(since, out, max, first);
+    *next = ring.next_seq();
+    taskEXIT_CRITICAL(&ring_lock);
+    return n;
+}
+
+size_t live_latest(live::Bucket* out, size_t max) {
+    uint64_t first;
+    taskENTER_CRITICAL(&ring_lock);
+    size_t n = ring.latest(out, max, &first);
+    taskEXIT_CRITICAL(&ring_lock);
+    return n;
+}
+
+uint32_t live_overruns() { return pool_overflows.load() - live_overrun_base; }

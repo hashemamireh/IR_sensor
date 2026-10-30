@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import Graph from '$lib/components/Graph.svelte';
+	import LiveView from '$lib/components/LiveView.svelte';
 	import RecordingsList from '$lib/components/RecordingsList.svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import { DeviceController } from '$lib/device.svelte';
@@ -45,6 +46,21 @@
 		}
 	}
 
+	// Live view takes over the graph area while it's open
+	let liveOpen = $state(false);
+	let seenLiveSession = 0;
+	$effect(() => {
+		if (!dev) return;
+		// The device entered live mode (from the app, its own menu, or before we
+		// connected): show it
+		if (dev.liveSession !== seenLiveSession) {
+			seenLiveSession = dev.liveSession;
+			liveOpen = true;
+		}
+		// Stopped from here, or a recording took over: back to the recordings
+		if (dev.liveEnded === 'stopped' || dev.liveEnded === 'recording') liveOpen = false;
+	});
+
 	// A recording started from the app opens once it has downloaded
 	$effect(() => {
 		if (dev?.autoOpen) {
@@ -58,7 +74,7 @@
 	<p class="banner danger fatal">The app couldn't start: {startError}</p>
 {:else if dev}
 	<div class="app">
-		<StatusBar {dev} />
+		<StatusBar {dev} bind:liveOpen />
 
 		{#if dev.connection === 'unreachable'}
 			<div class="banner warn offline">
@@ -80,7 +96,9 @@
 				<RecordingsList {dev} bind:selected bind:compare maxTraces={MAX_TRACES} />
 			</aside>
 			<section class="viewer">
-				{#if shown.length}
+				{#if liveOpen}
+					<LiveView {dev} onclose={() => (liveOpen = false)} />
+				{:else if shown.length}
 					<Graph recordings={shown} {dev} onremove={(r) => removeTrace(localKey(r))} />
 				{:else}
 					<div class="empty muted">

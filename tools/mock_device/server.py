@@ -21,7 +21,9 @@ import threading
 import time
 import zlib
 from array import array
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qsl
 
 # --- IREC format (spec §4.2, irec.h) ---------------------------------------
 
@@ -133,6 +135,7 @@ BRIGHTNESS = ("low", "medium", "high")
 SCREEN_TIMEOUTS_S = (30, 60, 300, 0)  # 0 = never
 DEFAULT_DURATIONS_S = (5, 10, 30, 60)
 SLEEP_TIMEOUTS_S = (300, 900, 1800, 0)  # 0 = never (§7.1)
+LIVE_TIMEOUTS_S = (60, 300, 600, 1800)  # live mode ends (§3.6)
 
 DEFAULT_SETTINGS = {
     "brightness": "medium",
@@ -140,6 +143,7 @@ DEFAULT_SETTINGS = {
     "default_sample_rate_hz": DEFAULT_SAMPLE_RATE_HZ,
     "default_duration_s": 30,
     "sleep_timeout_s": 900,
+    "live_timeout_s": 300,
 }
 
 # key -> parser returning the normalised value, or None if invalid
@@ -149,6 +153,7 @@ SETTING_PARSERS = {
     "default_sample_rate_hz": lambda v: _uint_in(v, SAMPLE_RATES_HZ),
     "default_duration_s": lambda v: _uint_in(v, DEFAULT_DURATIONS_S),
     "sleep_timeout_s": lambda v: _uint_in(v, SLEEP_TIMEOUTS_S),
+    "live_timeout_s": lambda v: _uint_in(v, LIVE_TIMEOUTS_S),
 }
 
 
@@ -177,21 +182,31 @@ def get_uint(v, max_value=UINT32_MAX):
 
 # --- API model (api_model.h / api_model.cpp) -------------------------------
 
-IDLE, RECORDING, SAVING, COMPRESSING = "idle", "recording", "saving", "compressing"
+IDLE, RECORDING, SAVING, COMPRESSING, LIVE = "idle", "recording", "saving", "compressing", "live"
 
 # Route names follow the api::Route enum
 ROUTE_STATUS = "Status"
 ROUTE_RECORD_STOP = "RecordStop"
 ROUTE_SETTINGS_GET = "SettingsGet"
+ROUTE_LIVE_START = "LiveStart"
+ROUTE_LIVE_STOP = "LiveStop"
+ROUTE_LIVE_DATA = "LiveData"
+ROUTE_COMPRESS = "Compress"
 
 
 def route_allowed(state, route):
-    """§8.2 "Requests During Recording": False means respond 409 Conflict."""
+    """§8.2 "Requests During Recording" / "During live mode": False means 409 Conflict."""
     if route in (ROUTE_STATUS, ROUTE_SETTINGS_GET):
         return True  # served from RAM
     if route == ROUTE_RECORD_STOP:
         return state == RECORDING
-    return state == IDLE
+    if route in (ROUTE_LIVE_STOP, ROUTE_LIVE_DATA):
+        return state == LIVE
+    if route in (ROUTE_LIVE_START, ROUTE_COMPRESS):
+        return state == IDLE
+    # Everything else, including starting a recording (which ends live mode) and
+    # sleeping, also works during live mode
+    return state in (IDLE, LIVE)
 
 
 MIN_UTC_US = 1704067200 * 1000000  # 2024-01-01T00:00:00Z
@@ -321,6 +336,33 @@ def compress_irec(data):
 # --- Device model ----------------------------------------------------------
 
 
+# --- Live mode (spec §3.6, live.h / synthetic.h) ---------------------------
+
+LIVE_SAMPLE_RATE_HZ = 10000
+LIVE_BUCKET_MS = 20
+LIVE_SAMPLES_PER_BUCKET = LIVE_SAMPLE_RATE_HZ * LIVE_BUCKET_MS // 1000
+LIVE_RING_BUCKETS = 640  # 12.8 s
+LIVE_MAX_PER_READ = 250  # buckets per GET /api/live (5 s)
+
+
+def synthetic_sample(index, rate_hz):
+    """synthetic::sample — dark baseline 200 ± 8 with a 5 ms pulse to 2500 every 250 ms."""
+    t_us = index * 1000000 // rate_hz
+    value = 2500 if t_us % 250000 < 5000 else 200
+    x = (index * 2654435761) & 0xFFFFFFFF
+    x ^= x >> 16
+    return value + x % 17 - 8
+
+
+def live_bucket(k):
+    """live::Accumulator over the k-th 20 ms slice since live mode started: [min, max, mean]."""
+    start = k * LIVE_SAMPLES_PER_BUCKET
+    vals = [synthetic_sample(i, LIVE_SAMPLE_RATE_HZ)
+            for i in range(start, start + LIVE_SAMPLES_PER_BUCKET)]
+    n = len(vals)
+    return [min(vals), max(vals), (sum(vals) + n // 2) // n]
+
+
 class Busy(Exception):
     """The device left idle between the route_allowed check and the action."""
 
@@ -338,7 +380,7 @@ class Device:
 
     def __init__(self, data_dir=None, capacity_bytes=25 * 1024 * 1024, time_scale=1.0,
                  unsynced_clock=False, ssid="IRSensor-MOCK", overrun_every=0,
-                 idle_sleep=False):
+                 idle_sleep=False, live_timeout=False):
         self.lock = threading.Lock()
         self.data_dir = data_dir
         self.capacity_bytes = capacity_bytes
@@ -360,13 +402,24 @@ class Device:
         self.compress_total = 0
         self.asleep = False
         self.on_sleep = []  # callbacks run when the device falls asleep
-        self.last_activity = time.monotonic()
+        self.last_activity = time.monotonic()  # idle-sleep countdown (§7.1)
+        self.live_activity = time.monotonic()  # live timeout countdown (§3.6)
+        self.idle_sleep = idle_sleep
+        self.live_timeout = live_timeout
+
+        # live::Ring: sequence numbers continue across live sessions
+        self.live_ring = deque(maxlen=LIVE_RING_BUCKETS)
+        self.live_next_seq = 0
+        self.live_start_seq = 0  # next_seq at the last start (Ring::clear)
+        self.live_start_mono = 0.0
+        self.live_made = 0  # buckets due so far in this session
+        self.live_overruns = 0
 
         if data_dir:
             os.makedirs(data_dir, exist_ok=True)
             self._load()
-        if idle_sleep:
-            threading.Thread(target=self._idle_watch, daemon=True).start()
+        if idle_sleep or live_timeout:
+            threading.Thread(target=self._watch, daemon=True).start()
 
     def _is_overrun(self, rec_id):
         """--overrun-every N marks every Nth recording ID as overrun."""
@@ -415,10 +468,13 @@ class Device:
     # -- recording
 
     def start_recording(self, rate_hz, duration_s):
-        """Returns (recording id, None) or (None, error name)."""
+        """Returns (recording id, None) or (None, error name). Ends live mode first,
+        before validating, as recorder_start does — so a refused recording ends it too."""
         with self.lock:
-            if self.state != IDLE:
+            if self.state not in (IDLE, LIVE):
                 raise Busy(self.state)
+            if self.state == LIVE:
+                self._end_live()
             err = validate(rate_hz, duration_s, self.free_bytes())
             if err:
                 return None, err
@@ -539,10 +595,13 @@ class Device:
     # -- deep sleep (§7.1)
 
     def request_sleep(self):
-        """POST /api/sleep: the response goes out first, sleep follows ~0.5 s later."""
+        """POST /api/sleep: the response goes out first, sleep follows ~0.5 s later.
+        Ends live mode first."""
         with self.lock:
-            if self.state != IDLE:
+            if self.state not in (IDLE, LIVE):
                 raise Busy(self.state)
+            if self.state == LIVE:
+                self._end_live()
         t = threading.Timer(0.5 / self.time_scale, self._fall_asleep)
         t.daemon = True
         t.start()
@@ -563,23 +622,83 @@ class Device:
             self.last_activity = time.monotonic()
 
     def note_activity(self):
-        """Any API request except GET /api/status restarts the idle countdown (§7.1)."""
+        """Any API request except GET /api/status and GET /api/live restarts the
+        idle-sleep (§7.1) and live (§3.6) countdowns."""
         with self.lock:
-            self.last_activity = time.monotonic()
+            self.last_activity = self.live_activity = time.monotonic()
 
-    def _idle_watch(self):
-        """--idle-sleep: sleep after sleep_timeout_s idle, as the device does (§7.1)."""
+    def _watch(self):
+        """--idle-sleep: sleep after sleep_timeout_s idle (§7.1).
+        --live-timeout: end live mode after live_timeout_s untouched (§3.6)."""
         while True:
             time.sleep(min(1.0, 0.25 / self.time_scale))
             with self.lock:
                 now = time.monotonic()
                 if self.state != IDLE:
                     self.last_activity = now  # the countdown only runs while idle
+                if (self.live_timeout and self.state == LIVE
+                        and (now - self.live_activity) * self.time_scale
+                        >= self.settings["live_timeout_s"]):
+                    self._end_live()
                 timeout = self.settings["sleep_timeout_s"]
-                due = (not self.asleep and timeout
+                due = (self.idle_sleep and not self.asleep and timeout
                        and (now - self.last_activity) * self.time_scale >= timeout)
             if due:
                 self._fall_asleep()
+
+    # -- live mode (§3.6)
+
+    def live_start(self):
+        with self.lock:
+            if self.state != IDLE:
+                raise Busy(self.state)
+            self.live_ring.clear()
+            self.live_start_seq = self.live_next_seq
+            self.live_start_mono = self.live_activity = time.monotonic()
+            self.live_made = 0
+            self.state = LIVE
+
+    def live_stop(self):
+        """Returns False if live mode had already ended."""
+        with self.lock:
+            if self.state != LIVE:
+                return False
+            self._end_live()
+            return True
+
+    def _end_live(self):
+        # lock held
+        self._advance_live()
+        self.state = IDLE
+
+    def _advance_live(self):
+        """Adds the buckets that have come due since live mode started (real time,
+        or faster with time_scale). lock held."""
+        elapsed = (time.monotonic() - self.live_start_mono) * self.time_scale
+        due = int(elapsed * 1000 // LIVE_BUCKET_MS)
+        if due - self.live_made > LIVE_RING_BUCKETS:  # skip what the ring couldn't hold
+            skipped = due - self.live_made - LIVE_RING_BUCKETS
+            self.live_made += skipped
+            self.live_next_seq += skipped
+        while self.live_made < due:
+            self.live_ring.append(live_bucket(self.live_made))
+            self.live_made += 1
+            self.live_next_seq += 1
+
+    def live_read(self, since):
+        """live::Ring::read — returns (first_seq, buckets, next_seq, overruns)."""
+        with self.lock:
+            if self.state != LIVE:
+                raise Busy(self.state)
+            self._advance_live()
+            nxt = self.live_next_seq
+            lo = max(self.live_start_seq, nxt - len(self.live_ring))
+            if since is None or since < lo or since > nxt:
+                since = lo
+            n = min(nxt - since, LIVE_MAX_PER_READ)
+            offset = since - (nxt - len(self.live_ring))
+            buckets = [self.live_ring[offset + i] for i in range(n)]
+            return since, buckets, nxt, self.live_overruns
 
     # -- settings
 
@@ -690,6 +809,9 @@ ROUTES = {
     ("POST", "/api/settings"): ("SettingsSet", "h_settings_set"),
     ("GET", "/api/calibration"): ("Calibration", "h_calibration"),
     ("POST", "/api/sleep"): ("Sleep", "h_sleep"),
+    ("POST", "/api/live/start"): (ROUTE_LIVE_START, "h_live_start"),
+    ("POST", "/api/live/stop"): (ROUTE_LIVE_STOP, "h_live_stop"),
+    ("GET", "/api/live"): (ROUTE_LIVE_DATA, "h_live_data"),
 }
 KNOWN_PATHS = {p for _, p in ROUTES}
 
@@ -754,9 +876,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         length = int(self.headers.get("Content-Length") or 0)
         self.body = self.rfile.read(length) if length else b""
-        path = self.path.split("?", 1)[0].rstrip("/") or "/"
-        if (self.command, path) != ("GET", "/api/status"):
-            self.device.note_activity()
+        path, _, self.query = self.path.partition("?")
+        path = path.rstrip("/") or "/"
+        if (self.command, path) not in (("GET", "/api/status"), ("GET", "/api/live")):
+            self.device.note_activity()  # polling doesn't count as activity
 
         self.rec_id = None
         key_path = path
@@ -873,6 +996,26 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(err[0], field=err[1])
         self.send_json(200, settings)
 
+    def h_live_start(self):
+        self.device.live_start()
+        self.send_json(200, {"sample_rate_hz": LIVE_SAMPLE_RATE_HZ, "bucket_ms": LIVE_BUCKET_MS})
+
+    def h_live_stop(self):
+        if not self.device.live_stop():  # ended between the state check and now
+            raise Busy(self.device.status()["state"])
+        self.send_json(200, {"stopped": True})
+
+    def h_live_data(self):
+        since = None
+        params = dict(parse_qsl(self.query, keep_blank_values=True))
+        if "since" in params:
+            if not re.fullmatch(r"[0-9]+", params["since"]):  # strtoull must consume it all
+                raise ApiError("invalid_query", field="since")
+            since = int(params["since"])
+        first, buckets, nxt, overruns = self.device.live_read(since)
+        self.send_json(200, {"bucket_ms": LIVE_BUCKET_MS, "first_seq": first, "next_seq": nxt,
+                             "overruns": overruns, "buckets": buckets})
+
     def h_sleep(self):
         self.device.request_sleep()
         self.send_json(200, {"sleeping": True})
@@ -974,6 +1117,9 @@ def main(argv=None):
                    help="start the device clock at the epoch until POST /api/time")
     p.add_argument("--no-calibration", action="store_true",
                    help="answer GET /api/calibration with 503, as a chip without eFuse data")
+    p.add_argument("--live-timeout", action="store_true",
+                   help="end live mode after the live_timeout_s setting (default 300 s) with no "
+                        "requests other than GET /api/status and GET /api/live")
     p.add_argument("--idle-sleep", action="store_true",
                    help="fall asleep after the sleep_timeout_s setting (default 900 s) with no "
                         "requests other than GET /api/status, as the device does")
@@ -986,7 +1132,8 @@ def main(argv=None):
 
     device = Device(data_dir=args.data_dir, capacity_bytes=args.capacity,
                     time_scale=args.time_scale, unsynced_clock=args.unsynced_clock,
-                    overrun_every=args.overrun_every, idle_sleep=args.idle_sleep)
+                    overrun_every=args.overrun_every, idle_sleep=args.idle_sleep,
+                    live_timeout=args.live_timeout)
     if args.seed:
         device.seed(args.seed)
     server = DeviceServer(device, args.host, args.port, wake_after=args.wake_after,

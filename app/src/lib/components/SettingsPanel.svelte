@@ -81,6 +81,17 @@
 			</p>
 		{/if}
 
+		{#if saved && 'live_timeout_s' in saved}
+			<span class="label">Live timeout</span>
+			<Segmented label="Live timeout" bind:value={draft.live_timeout_s} options={[
+				{ value: 60, label: '1 min' },
+				{ value: 300, label: '5 min' },
+				{ value: 600, label: '10 min' },
+				{ value: 1800, label: '30 min' },
+			]} />
+			<p class="muted small">Live view ends after this long without activity. Just watching the live graph doesn't count.</p>
+		{/if}
+
 		<span class="label">Quick Start sample rate</span>
 		<Segmented label="Quick Start sample rate" bind:value={draft.default_sample_rate_hz}
 			options={SAMPLE_RATES_HZ.map((r) => ({ value: r as number, label: `${r / 1000} kHz` }))} />
@@ -97,7 +108,7 @@
 			The Quick Start values are what the device's own Record → Quick Start uses after each boot or wake.
 			They don't change the app's record settings.
 		</p>
-		{#if !dev.idle}
+		{#if !dev.ready}
 			<p class="banner warn small">
 				{dev.online ? 'The device is busy. Settings can be saved once it is idle again.' : 'The device is offline.'}
 			</p>
@@ -112,7 +123,7 @@
 <div class="actions">
 	{#if !draft && error}<button onclick={load}>Try again</button>{/if}
 	<button onclick={onclose}>{dirty ? 'Cancel' : 'Close'}</button>
-	<button class="primary" disabled={!dirty || saving || !dev.idle} onclick={save}>
+	<button class="primary" disabled={!dirty || saving || !dev.ready} onclick={save}>
 		{saving ? 'Saving…' : 'Save'}
 	</button>
 </div>

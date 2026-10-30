@@ -259,6 +259,24 @@ python3 tools/check_irec.py 00001z.irec --period-ms 250
 
 - [ ] Running Compress All again → `{"queued":0}` and the state stays `idle`.
 
+### 1.9b Live view
+
+- [ ] Menu → Live View: big reading, `pk`, `LIVE`, and a strip chart that scrolls right to left.
+  On the synthetic build the chart shows a spike every 250 ms; the LED pulses green/cyan. Log:
+  `recorder: Live view started (10000 Hz, 20 ms buckets)`.
+- [ ] From the Mac — `buckets` is an array of `[min, max, mean]`, ~12 per 0.25 s:
+
+```bash
+curl -s "http://192.168.4.1/api/live?since=0" | head -c 300
+```
+
+- [ ] While live, `curl -s http://192.168.4.1/api/recordings` still works (not `409`), and
+  `curl -s -X POST http://192.168.4.1/api/compress` returns `409 busy` with `"state":"live"`.
+- [ ] Short press in live view → a recording starts straight away (Record menu settings).
+- [ ] Settings → Live timeout → 1min, start live view and leave it: after ~50 s "Live view ends
+  in 10 s" appears; a click continues it; leaving it alone returns to home. Then set it back to
+  5min.
+
 ### 1.10 Deep sleep and wake
 
 - [ ] Settings → Sleep after → 5min, then leave the device alone (no app requests either).

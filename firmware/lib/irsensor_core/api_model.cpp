@@ -8,6 +8,7 @@ const char* state_str(DeviceState s) {
         case DeviceState::Recording:   return "recording";
         case DeviceState::Saving:      return "saving";
         case DeviceState::Compressing: return "compressing";
+        case DeviceState::Live:        return "live";
     }
     return "unknown";
 }
@@ -19,8 +20,16 @@ bool route_allowed(DeviceState s, Route r) {
             return true;  // served from RAM
         case Route::RecordStop:
             return s == DeviceState::Recording;
-        default:
+        case Route::LiveStop:
+        case Route::LiveData:
+            return s == DeviceState::Live;
+        case Route::LiveStart:
+        case Route::Compress:
             return s == DeviceState::Idle;
+        default:
+            // Everything else, including starting a recording (which ends
+            // live view) and sleeping, also works during live view
+            return s == DeviceState::Idle || s == DeviceState::Live;
     }
 }
 

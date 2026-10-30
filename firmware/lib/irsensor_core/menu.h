@@ -12,6 +12,7 @@
 #include "api_model.h"
 #include "framebuffer.h"
 #include "irec.h"
+#include "live.h"
 #include "recording.h"
 #include "settings.h"
 
@@ -62,6 +63,9 @@ public:
     virtual int              compress_all() = 0;  // count queued, -1 if busy, -2 if unavailable
     virtual bool             set_wifi_enabled(bool on) = 0;
     virtual bool             deep_sleep() = 0;    // only returns (false) if busy
+    virtual bool             start_live() = 0;    // false if busy
+    virtual void             stop_live() = 0;
+    virtual live::View       live_view() = 0;
 };
 
 class Menu {
@@ -78,11 +82,12 @@ public:
     // SSID, password and IP — also shown on first boot (spec §8.1).
     void show_wifi_info();
 
-    // "Going to sleep in N s" before the idle deep sleep (spec §7.1). Call again
-    // to update the countdown; dismiss when there's activity.
-    void show_sleep_warning(uint32_t seconds_left);
-    void dismiss_sleep_warning();
-    bool sleep_warning_shown() const { return sleep_warning_; }
+    // A countdown over the current screen — "Going to sleep in N s" (spec §7.1),
+    // "Live view ends in N s" (§3.6). Call again to update it; any input
+    // dismisses it (the caller treats that input as activity).
+    void show_countdown(const std::string& title, const std::string& hint, uint32_t seconds_left);
+    void dismiss_countdown();
+    bool countdown_shown() const { return countdown_; }
 
     // Something changed since the last render().
     bool dirty() const { return dirty_; }
@@ -100,7 +105,7 @@ private:
     };
 
     struct Screen {
-        enum class Kind { Home, List, Text, Recording, Saving };
+        enum class Kind { Home, List, Text, Recording, Saving, Live };
         Kind                       kind = Kind::List;
         std::string                title;
         std::vector<Item>          items;  // List
@@ -134,15 +139,18 @@ private:
     Screen settings_menu();
     Screen recording_screen();
     Screen saving_screen();
+    Screen live_screen();
     Screen confirm(const std::string& question, std::function<void()> on_yes);
     Screen choice(const std::string& title, const std::vector<Option>& options, uint32_t current,
                   std::function<void(uint32_t)> on_pick);
 
     void start_recording();
+    void start_live();
     void update_settings(const std::function<void(settings::Settings&)>& change);
 
     void draw_status_bar(Framebuffer& fb, const StatusSnapshot& st);
     void draw_home(Framebuffer& fb, const StatusSnapshot& st);
+    void draw_live(Framebuffer& fb);
 
     Device&             dev_;
     std::vector<Screen> stack_;
@@ -150,7 +158,7 @@ private:
     uint32_t            rec_rate_hz_;     // "last used" for Quick Start
     uint32_t            rec_duration_s_;
     bool                dirty_ = true;
-    bool                sleep_warning_ = false;  // the warning screen is on top
+    bool                countdown_ = false;  // the countdown screen is on top
 };
 
 }  // namespace ui

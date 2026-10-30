@@ -18,7 +18,8 @@ constexpr uint8_t  LOW_BATTERY_PCT = 15;
 constexpr uint32_t PULSE_PERIOD_MS = 1200;
 
 // Recording/saving → red pulsing; low battery → amber; tablet connected →
-// cyan (green + blue); otherwise green.
+// cyan (green + blue); otherwise green. Live view pulses the colour it would
+// otherwise show steadily.
 Rgb led_color(api::DeviceState state, bool client_connected, bool low_battery, uint32_t now_ms);
 
 }  // namespace ui

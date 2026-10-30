@@ -1,43 +1,10 @@
 <script lang="ts">
-	import { maxDurationS, SAMPLE_RATES_HZ } from '$lib/api';
+	import { SAMPLE_RATES_HZ } from '$lib/api';
 	import type { DeviceController } from '$lib/device.svelte';
+	import { CUSTOM, PRESETS_S, recordSettings as rs } from '$lib/recordSettings.svelte';
 	import Segmented from './Segmented.svelte';
 
 	let { dev }: { dev: DeviceController } = $props();
-
-	const PRESETS_S = [5, 10, 30, 60, 120, 300];
-	const CUSTOM = 0;
-
-	function saved(key: string, fallback: number): number {
-		try {
-			const v = Number(localStorage.getItem(key));
-			return Number.isFinite(v) && localStorage.getItem(key) !== null ? v : fallback;
-		} catch {
-			return fallback;
-		}
-	}
-
-	let rateHz = $state(saved('irsensor.rateHz', 10000));
-	let preset = $state(saved('irsensor.preset', 30));
-	let customS = $state(saved('irsensor.customS', 45));
-
-	const cap = $derived(maxDurationS(rateHz));
-	const durationS = $derived(preset === CUSTOM ? customS : preset);
-	const valid = $derived(Number.isInteger(durationS) && durationS >= 1 && durationS <= cap);
-
-	// 300 s isn't allowed at 20 kHz (spec §4.4): fall back to the cap
-	$effect(() => {
-		if (preset > cap) preset = cap;
-	});
-	$effect(() => {
-		try {
-			localStorage.setItem('irsensor.rateHz', String(rateHz));
-			localStorage.setItem('irsensor.preset', String(preset));
-			localStorage.setItem('irsensor.customS', String(customS));
-		} catch {
-			// not important
-		}
-	});
 
 	const rec = $derived(dev.online ? dev.status?.recording : undefined);
 	const devState = $derived(dev.online ? dev.status?.state : undefined);
@@ -45,7 +12,7 @@
 
 	async function start() {
 		starting = true;
-		await dev.startRecording(durationS, rateHz);
+		await dev.startRecording(rs.durationS, rs.rateHz);
 		starting = false;
 	}
 </script>
@@ -76,30 +43,32 @@
 		<span class="label">Sample rate</span>
 		<Segmented
 			label="Sample rate"
-			bind:value={rateHz}
+			bind:value={rs.rateHz}
 			options={SAMPLE_RATES_HZ.map((r) => ({ value: r as number, label: `${r / 1000} kHz` }))}
 		/>
 
 		<span class="label">Duration</span>
 		<Segmented
 			label="Duration"
-			bind:value={preset}
+			bind:value={rs.preset}
 			options={[
-				...PRESETS_S.filter((s) => s <= cap).map((s) => ({ value: s, label: s < 60 ? `${s} s` : `${s / 60} min` })),
+				...PRESETS_S.filter((s) => s <= rs.cap).map((s) => ({ value: s, label: s < 60 ? `${s} s` : `${s / 60} min` })),
 				{ value: CUSTOM, label: 'Custom' },
 			]}
 		/>
-		{#if preset === CUSTOM}
+		{#if rs.preset === CUSTOM}
 			<div class="custom">
-				<input type="number" min="1" max={cap} step="1" bind:value={customS} inputmode="numeric" />
-				<span class="muted">seconds (1–{cap})</span>
+				<input type="number" min="1" max={rs.cap} step="1" bind:value={rs.customS} inputmode="numeric" />
+				<span class="muted">seconds (1–{rs.cap})</span>
 			</div>
 		{/if}
 
-		<button class="record" disabled={!dev.idle || !valid || starting} onclick={start}>
-			<span class="recdot"></span> Record {valid ? `${durationS} s` : ''} at {rateHz / 1000} kHz
+		<button class="record" disabled={!dev.ready || !rs.valid || starting} onclick={start}>
+			<span class="recdot"></span> Record {rs.label}
 		</button>
-		{#if dev.online && !dev.idle}
+		{#if devState === 'live'}
+			<p class="muted hint">Recording ends live view on the device.</p>
+		{:else if dev.online && !dev.ready}
 			<p class="muted hint">The device is busy.</p>
 		{/if}
 	{/if}

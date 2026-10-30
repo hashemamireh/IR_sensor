@@ -113,6 +113,44 @@ The ESP32-C5's GDMA controller offloads ADC sampling entirely to hardware:
   logs a rough measured rate (samples ÷ elapsed time) after every recording to help fill the
   table.
 
+### 3.6. Live Mode
+
+Live mode shows the sensor's reading continuously on the OLED and in the app, without recording.
+It's for aiming the sensor and checking signal levels before a recording, and for watching pulse
+activity.
+
+- **Sampling vs display rate.** The ADC still samples at **10 kHz** — IR pulses can be a few ms
+  long, and sampling only as often as the display updates would miss most of them. Instead of
+  storing samples, the device reduces each **20 ms** slice to its **min, max and mean** (a
+  "bucket"), so even a short pulse still shows as a spike in the max.
+- **Ring.** Buckets go into a ring of the last 640 (12.8 s), each with a sequence number. The app
+  polls `GET /api/live?since=N` about 4×/s and gets every bucket since the last one it saw (~12 per
+  poll); a late or missed poll loses nothing. Values are raw ADC counts; the app converts them to
+  mV with the calibration table, as for recordings.
+- **OLED.** The status bar, a large reading (mean of the last 100 ms, in mV — raw counts if the
+  chip has no calibration), the peak over the window, and a scrolling min/max strip chart: one
+  pixel column per 100 ms, newest at the right (12.8 s). Redrawn 10×/s.
+- **App.** A live strip chart (min/max band, last 10–30 s) next to a large current reading and
+  peak (§10.3).
+- **Controls.** Device: Main Menu → Live View; a **short press** starts a recording straight
+  away with the Record menu's duration and rate; a **long press** ends live mode. App: start,
+  stop, and record (`POST /api/record` works during live mode and ends it first).
+- **State.** The device reports `state: "live"`. Live mode doesn't write flash, so most API
+  requests stay allowed during it (downloads, deletes, settings, time sync; §8.2); compression
+  doesn't, since it has its own state. Flash work during live mode can make the ADC drop
+  samples; `GET /api/live` reports a running `overruns` count.
+- **Timeouts** (§7):
+  - **Live timeout** (setting: 1, 5, 10 or 30 min; default **5 min**): live mode ends after
+    this long without encoder input or app activity (any request except `GET /api/status` and
+    `GET /api/live` — polling alone doesn't keep it running, so a tablet left on the live graph
+    can't keep the device awake indefinitely). For the last 10 s the OLED shows "Live view ends
+    in N s — Press to continue" and the LED blinks; any input continues it.
+  - While live mode runs, the **screen timeout** and the **deep-sleep timeout** are suspended
+    (it counts as activity). When it ends, both start counting from that moment — so a
+    forgotten device stays awake at most live timeout + sleep timeout.
+- **LED.** Pulses its usual idle colour (green, or cyan with a tablet connected).
+- **Battery** readings continue during live mode (unlike recording).
+
 ---
 
 ## 4. Recording & Storage
@@ -306,6 +344,7 @@ Shows the current screen context: status screen, menu, or recording feedback.
 | :--- | :--- | :--- |
 | 🟢 Green | Steady | Idle, ready |
 | 🔴 Red | Pulsing | Recording in progress (also while saving) |
+| 🟢 Green / cyan | Pulsing | Live mode (§3.6) |
 | 🔵 Blue | Steady | Tablet connected (overlays with green → cyan) |
 | 🟡 Amber | Steady | Low battery warning (≤ 15%) — takes precedence over cyan/green |
 | Off | — | Deep sleep |
@@ -332,6 +371,8 @@ From the **Status Screen** (shown on wake), a **short press** opens the **Main M
 │   ├── Set Duration → [5s │ 10s │ 30s │ 60s │ 120s │ 300s]  (300s hidden at 20 kHz)
 │   └── Set Sample Rate → [1 kHz │ 2 kHz │ 5 kHz │ 10 kHz │ 20 kHz]
 │
+├── 📈 Live View (§3.6) — short press: record now; long press: back
+│
 ├── 📂 Recordings
 │   ├── [#42 10-01 14:23 30s]  (newest first; times in UTC)
 │   │   ├── View Info (duration, size, sample rate, timestamp)
@@ -355,7 +396,8 @@ From the **Status Screen** (shown on wake), a **short press** opens the **Main M
 │   ├── Screen Timeout → [30s │ 1 min │ 5 min │ Never]
 │   ├── Default Sample Rate → [1 kHz │ 2 kHz │ 5 kHz │ 10 kHz │ 20 kHz]
 │   ├── Default Duration → [5s │ 10s │ 30s │ 60s]
-│   └── Sleep After → [5 min │ 15 min │ 30 min │ Never]
+│   ├── Sleep After → [5 min │ 15 min │ 30 min │ Never]
+│   └── Live Timeout → [1 min │ 5 min │ 10 min │ 30 min]
 │
 └── 💤 Deep Sleep → [Confirm? Yes / No]
 ```
@@ -411,7 +453,7 @@ From the **Status Screen** (shown on wake), a **short press** opens the **Main M
 ### 7.2. Screen Power Saving
 
 - After the configured timeout (default: 1 minute), the OLED is turned off to save power. The
-  timeout only applies while idle.
+  timeout only applies while idle — the screen stays on during recording and live mode (§3.6).
 - Any rotary encoder interaction wakes the screen (and is otherwise ignored). A device state
   change — e.g. a recording started from the app, or one finishing — also wakes it.
 
@@ -456,7 +498,7 @@ needed — the simplicity of stateless REST is preferred on a single-core MCU wi
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
-| `GET` | `/api/status` | Device status: battery (voltage + SoC%), free space, recording count, WiFi info, current state (`idle` / `recording` / `saving` / `compressing`), recording progress while recording, compression progress while compressing (shape under Response Formats) |
+| `GET` | `/api/status` | Device status: battery (voltage + SoC%), free space, recording count, WiFi info, current state (`idle` / `recording` / `saving` / `compressing` / `live`), recording progress while recording, compression progress while compressing (shape under Response Formats) |
 | `POST` | `/api/record` | Start recording. Body: `{"duration_s": 30, "sample_rate_hz": 10000}` (nominal rate; both required). Returns error if insufficient space or the duration exceeds the cap for that rate (§4.4). |
 | `POST` | `/api/record/stop` | Stop the current recording early. The partial recording is finalized and saved. |
 | `GET` | `/api/recordings` | List all recordings with metadata (entry fields under Response Formats). Served from RAM (§4.6), so it's quick however many recordings there are |
@@ -467,13 +509,15 @@ needed — the simplicity of stateless REST is preferred on a single-core MCU wi
 | `POST` | `/api/compress` | Trigger compression of all uncompressed recordings |
 | `POST` | `/api/settings` | Update device settings. Body: JSON of setting key-values |
 | `POST` | `/api/sleep` | Enter deep sleep (§7.1). Responds first, then sleeps ~0.5 s later; WiFi goes down with it |
+| `POST` | `/api/live/start` | Start live mode (§3.6) |
+| `POST` | `/api/live/stop` | End live mode |
+| `GET` | `/api/live?since=N` | Live buckets from sequence number N on (polled like status) |
 | `GET` | `/api/settings` | Read current device settings |
 | `GET` | `/api/calibration` | Raw → mV lookup table for the OPT101 channel: `{"attenuation_db": 12, "mv": [<4096 integers>]}` (§3.4) |
 
 #### Requests During Recording
 
-While the device is not `idle` (recording, saving or compressing), only these requests are
-served:
+While the device is recording, saving or compressing, only these requests are served:
 
 - `GET /api/status`
 - `POST /api/record/stop` (recording only)
@@ -483,13 +527,18 @@ Every other request returns **`409 Conflict`** with `{"error": "busy", "state": 
 includes settings changes, since NVS writes go to flash. The app retries once the state returns
 to `idle`.
 
+**During live mode** (`state: "live"`, §3.6) everything is served except `POST /api/compress`,
+`POST /api/live/start` and `POST /api/record/stop`. `POST /api/record` ends live mode and starts
+the recording; `POST /api/sleep` ends it and sleeps. `GET /api/live` and `POST /api/live/stop`
+are only served during live mode.
+
 #### Response Formats
 
 All JSON bodies are objects. Shapes for the endpoints whose output isn't obvious from the table:
 
 | Endpoint | Success response |
 | :--- | :--- |
-| `GET /api/status` | `200` `{"state": "idle"\|"recording"\|"saving"\|"compressing", "battery": {"mv", "pct"}, "free_bytes", "recording_count", "wifi": {"ssid", "client_connected"}}`, plus `"recording": {"id", "elapsed_s", "total_s"}` while recording and `"compress": {"done", "total"}` while compressing |
+| `GET /api/status` | `200` `{"state": "idle"\|"recording"\|"saving"\|"compressing"\|"live", "battery": {"mv", "pct"}, "free_bytes", "recording_count", "wifi": {"ssid", "client_connected"}}`, plus `"recording": {"id", "elapsed_s", "total_s"}` while recording and `"compress": {"done", "total"}` while compressing |
 | `POST /api/record` | `200` `{"id": 42, "duration_s": 30, "sample_rate_hz": 10000}` |
 | `POST /api/record/stop` | `200` `{"id": 42}` |
 | `GET /api/recordings` | `200` `{"recordings": [<entry>, …]}` in ascending ID order; each entry is `{"id", "start_utc_us", "duration_ms", "sample_rate_mhz", "sample_count", "size_bytes", "compressed", "overrun", "attenuation_db"}` (`attenuation_db` is a number, e.g. `12` or `2.5`) |
@@ -497,9 +546,12 @@ All JSON bodies are objects. Shapes for the endpoints whose output isn't obvious
 | `DELETE /api/recordings/{id}` | `200` `{"deleted": 1}` |
 | `DELETE /api/recordings` | `200` `{"deleted": <count>}` |
 | `POST /api/time` | `200` `{"utc_us": <device time after the update>}` |
-| `GET` / `POST /api/settings` | `200` the full settings object: `{"brightness": "low"\|"medium"\|"high", "screen_timeout_s": 30\|60\|300\|0, "default_sample_rate_hz": …, "default_duration_s": 5\|10\|30\|60, "sleep_timeout_s": 300\|900\|1800\|0}` (`0` = never). `POST` accepts any subset of these keys and applies all or nothing. |
+| `GET` / `POST /api/settings` | `200` the full settings object: `{"brightness": "low"\|"medium"\|"high", "screen_timeout_s": 30\|60\|300\|0, "default_sample_rate_hz": …, "default_duration_s": 5\|10\|30\|60, "sleep_timeout_s": 300\|900\|1800\|0, "live_timeout_s": 60\|300\|600\|1800}` (`0` = never). `POST` accepts any subset of these keys and applies all or nothing. |
 | `POST /api/compress` | `200` `{"queued": <count>}` — progress via `/api/status`; `0` means nothing to compress (state stays `idle`) |
 | `POST /api/sleep` | `200` `{"sleeping": true}` |
+| `POST /api/live/start` | `200` `{"sample_rate_hz": 10000, "bucket_ms": 20}` |
+| `POST /api/live/stop` | `200` `{"stopped": true}` (the state returns to `idle` shortly after) |
+| `GET /api/live?since=N` | `200` `{"bucket_ms": 20, "first_seq", "next_seq", "overruns", "buckets": [[min, max, mean], …]}` — raw ADC counts, oldest first; at most 250 buckets (5 s). `first_seq` is the sequence number of `buckets[0]`; poll next with `since=next_seq`. A `since` older than the ring (or omitted) starts at the oldest bucket held, so `first_seq > since` means buckets were missed. `400 invalid_query` (+ `field`) for a non-numeric `since` |
 
 Errors use `{"error": "<code>"}`, plus `"field"` for settings errors:
 
@@ -681,7 +733,15 @@ loss and before the next sync has a start time near 1970. The app treats any sta
    - Automatic download of recordings (§10.4); a recording started from the app opens in the
      graph once it has downloaded
 
-3. **Data Visualization**
+3. **Live View** (§3.6)
+   - Start/stop live mode on the device; poll `GET /api/live` ~4×/s while it runs
+   - Scrolling strip chart of the min/max band (last 10–30 s), plus a large current reading and
+     the recent peak, in mV via the calibration table
+   - A Record button that starts a recording straight from live mode
+   - Shows live mode ended (timeout, device button, or another client) when the state leaves
+     `live`
+
+4. **Data Visualization**
    - Time-series graph of recording data (ADC value or calibrated voltage vs. time)
    - **Interactive zoom & pan** (pinch-to-zoom on touch screen, scroll wheel, drag to pan)
    - **Measurement cursors**: Tap/click two points to see Δt and Δvalue
@@ -690,7 +750,7 @@ loss and before the next sync has a start time near 1970. The app treats any sta
      - Toggle individual traces on/off
      - Time-alignment options (align by start, or manual offset)
 
-4. **Recording Management**
+5. **Recording Management**
    - Browse all recordings on device (synced list)
    - Download individual or all recordings to tablet local storage
    - Delete a recording from the device, the tablet, or both: one Delete button opens a dialog
@@ -702,21 +762,22 @@ loss and before the next sync has a start time near 1970. The app treats any sta
    - View recording metadata (timestamp, duration, sample rate, size)
    - Name / tag / annotate recordings with notes
 
-5. **Export**
+6. **Export**
    - Export recording data as **CSV** (timestamp_ms, raw_adc, voltage_mv) — `voltage_mv` uses the
      device's calibration table stored in the recording's sidecar (§3.4)
    - Export recording data as **JSON**
    - Export graph as image (PNG/SVG)
 
-6. **Device Settings** (remote configuration)
+7. **Device Settings** (remote configuration)
    - Screen brightness
    - Screen timeout
    - Default sample rate
    - Default recording duration
+   - Sleep after (§7.1) and live timeout (§3.6)
    - (WiFi SSID and password are not remotely configurable — changing them would drop the
      tablet's connection; see §8.1)
 
-7. **Statistics**
+8. **Statistics**
    - Per-recording: min, max, mean, standard deviation of ADC values
    - Display in a summary panel alongside the graph
 
@@ -775,7 +836,7 @@ The app stores downloaded recordings locally on the tablet filesystem (via Tauri
   - a `404` (deleted meanwhile, or a 0-sample recording) is dropped quietly;
   - a CRC mismatch is retried once; if it fails again the file is kept, marked
     `crc_ok: false`, and never deleted from the device automatically;
-  - recordings deleted from the tablet only are skipped (§10.3.4).
+  - recordings deleted from the tablet only are skipped (§10.3.5).
 - **Calibration fallback.** The table is fetched once per connection (it never changes for a
   chip) and cached per device. If `GET /api/calibration` returns `503 calibration_unavailable`,
   the app uses a table cached on an earlier connection, if any; otherwise the sidecar gets

@@ -68,23 +68,23 @@ void Framebuffer::rect(int x, int y, int w, int h, bool on) {
     fill_rect(x + w - 1, y, 1, h, on);
 }
 
-int Framebuffer::text(int x, int y, const char* s, bool on) {
+int Framebuffer::text(int x, int y, const char* s, bool on, int scale) {
     int start = x;
-    for (; *s; s++, x += CHAR_W) {
+    for (; *s; s++, x += CHAR_W * scale) {
         unsigned char c = static_cast<unsigned char>(*s);
         if (c < 0x20 || c > 0x7E) c = '?';
         const uint8_t* glyph = FONT[c - 0x20];
         for (int col = 0; col < 5; col++) {
             for (int row = 0; row < CHAR_H; row++) {
-                if (glyph[col] & (1u << row)) set_pixel(x + col, y + row, on);
+                if (glyph[col] & (1u << row)) fill_rect(x + col * scale, y + row * scale, scale, scale, on);
             }
         }
     }
     return x - start;
 }
 
-int Framebuffer::text_width(const char* s) {
-    return static_cast<int>(strlen(s)) * CHAR_W;
+int Framebuffer::text_width(const char* s, int scale) {
+    return static_cast<int>(strlen(s)) * CHAR_W * scale;
 }
 
 std::string Framebuffer::to_ascii() const {

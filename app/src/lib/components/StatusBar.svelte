@@ -5,7 +5,16 @@
 	import RecordPanel from './RecordPanel.svelte';
 	import SettingsPanel from './SettingsPanel.svelte';
 
-	let { dev }: { dev: DeviceController } = $props();
+	let { dev, liveOpen = $bindable() }: { dev: DeviceController; liveOpen: boolean } = $props();
+
+	async function toggleLive() {
+		if (dev.live) {
+			liveOpen = !liveOpen; // already running: show / hide the view
+		} else {
+			liveOpen = true;
+			if (!(await dev.startLive())) liveOpen = false; // refused; the notice says why
+		}
+	}
 
 	let open = $state(false);
 	let custom = $state('');
@@ -28,6 +37,7 @@
 		recording: 'Recording',
 		saving: 'Saving',
 		compressing: 'Compressing',
+		live: 'Live',
 	};
 
 	function choose(url: string) {
@@ -49,11 +59,22 @@
 			Battery {s.battery.pct}% · {(s.battery.mv / 1000).toFixed(2)} V
 		</span>
 		<span class="item">{bytes(s.free_bytes)} free</span>
-		<span class="badge {s.state === 'idle' ? 'ok' : 'warn'}">{stateText[s.state] ?? s.state}</span>
+		<span class="badge {s.state === 'idle' || s.state === 'live' ? 'ok' : 'warn'}">{stateText[s.state] ?? s.state}</span>
 		{#if !dev.timeSynced}<span class="badge">clock not synced yet</span>{/if}
 	{/if}
 
 	<span class="spacer"></span>
+
+	<button
+		class="livebtn"
+		class:on={dev.live}
+		disabled={!dev.ready}
+		aria-pressed={liveOpen}
+		title={dev.live ? (liveOpen ? 'Hide live view' : 'Show live view') : 'Start live view'}
+		onclick={toggleLive}
+	>
+		<span class="ldot"></span> Live
+	</button>
 
 	<Popover open={recordOpen} onclose={() => (recordOpen = false)} align="right" width={540} label="Record">
 		{#snippet trigger()}
@@ -162,6 +183,26 @@
 	}
 	.choice.on {
 		border-color: var(--accent);
+	}
+	.livebtn {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		font-weight: 600;
+	}
+	.ldot {
+		width: 9px;
+		height: 9px;
+		border-radius: 50%;
+		background: var(--muted);
+	}
+	.livebtn.on {
+		border-color: color-mix(in srgb, var(--ok) 60%, transparent);
+		background: color-mix(in srgb, var(--ok) 14%, var(--panel-2));
+	}
+	.livebtn.on .ldot {
+		background: var(--ok);
+		animation: pulse 1.2s ease-in-out infinite;
 	}
 	/* Same look as the record button in the panel */
 	.rec {
