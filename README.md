@@ -13,7 +13,7 @@ The app for **macOS on Apple Silicon** (M1 or later, macOS 11 or later):
 
 | Version | File | Size | SHA-256 |
 | :--- | :--- | :--- | :--- |
-| 0.1.0 | [IR-Sensor_0.1.0_aarch64.dmg](https://github.com/hashemamireh/IR_sensor/releases/download/v0.1.0/IR-Sensor_0.1.0_aarch64.dmg) | 3.7 MB | `255b961ba19c88161e8c34fb21e4a8bd31c186f9e9f9f12a8f403d6251c82c47` |
+| 0.1.0 | [IR-Sensor_0.1.0_aarch64.dmg](https://github.com/hashemamireh/IR_sensor/releases/download/v0.1.0/IR-Sensor_0.1.0_aarch64.dmg) | 3.7 MB | `935c29a6e9422c2d2b0f7e7dcba048b636191b4f95cf6ffd9448d259497a8174` |
 
 All versions are on the [Releases](https://github.com/hashemamireh/IR_sensor/releases) page.
 Each release also has a `SHA256SUMS` file.
