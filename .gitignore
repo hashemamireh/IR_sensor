@@ -27,3 +27,6 @@ compile_commands.json
 
 # recordings
 */*.irec
+
+# ProtonDrive sync-conflict copies
+*(# Edit conflict*
