@@ -9,24 +9,23 @@ A battery-powered handheld recorder for IR light pulses, with a companion deskto
 
 ## Download
 
-The app for **macOS on Apple Silicon** (M1 or later, macOS 11 or later):
+Get the app from the **[latest release](https://github.com/hashemamireh/IR_sensor/releases/latest)**:
 
-| Version | File | Size | SHA-256 |
-| :--- | :--- | :--- | :--- |
-| 0.1.0 | [IR-Sensor_0.1.0_aarch64.dmg](https://github.com/hashemamireh/IR_sensor/releases/download/v0.1.0/IR-Sensor_0.1.0_aarch64.dmg) | 3.7 MB | `935c29a6e9422c2d2b0f7e7dcba048b636191b4f95cf6ffd9448d259497a8174` |
+| Platform | File |
+| :--- | :--- |
+| macOS 11 or later, Apple Silicon (M1 or later) | `IR-Sensor_<version>_aarch64.dmg` |
+| Fedora 44 or later, x86_64 | `IR-Sensor_<version>_x86_64.rpm` |
 
-All versions are on the [Releases](https://github.com/hashemamireh/IR_sensor/releases) page.
-Each release also has a `SHA256SUMS` file.
-
-### Check the download
-
-Run this in the folder you downloaded to. It should print the same hash as the table above:
+The release notes list each file's SHA-256, and so does the `SHA256SUMS` file attached to
+the release. To check a download, run this in the folder you downloaded it to, and compare
+the output with the release's hash:
 
 ```bash
-shasum -a 256 IR-Sensor_0.1.0_aarch64.dmg
+shasum -a 256 IR-Sensor_*.dmg    # macOS
+sha256sum IR-Sensor_*.rpm        # Fedora
 ```
 
-### Install and first launch
+### Install on macOS
 
 1. Open the `.dmg` and drag **IR Sensor** into **Applications**.
 2. Open IR Sensor. The app is ad-hoc signed but not notarised by Apple, so the first time,
@@ -41,10 +40,37 @@ it again:
 xattr -dr com.apple.quarantine "/Applications/IR Sensor.app"
 ```
 
+### Install on Fedora
+
+```bash
+sudo dnf install webkit2gtk4.1 ./IR-Sensor_<version>_x86_64.rpm
+```
+
+**IR Sensor** then appears in the app launcher. If its window opens blank, start it from a
+terminal with `WEBKIT_DISABLE_DMABUF_RENDERER=1 irsensor-app`.
+
 ### Other platforms
 
-There's no ready-made build yet for Intel Macs, Linux or Windows. Build the app from source
-by following [app/README.md](app/README.md). A Fedora `.rpm` is planned.
+There's no ready-made build for Intel Macs, other Linux distributions or Windows. Build the
+app from source by following [app/README.md](app/README.md).
+
+### Making a release
+
+Releases are built by GitHub Actions ([`.github/workflows/release.yml`](.github/workflows/release.yml)):
+
+1. Set the new version in `app/src-tauri/tauri.conf.json` (and `app/package.json`), and
+   commit.
+2. Tag the commit and push the tag:
+
+   ```bash
+   git tag v0.2.0 && git push origin v0.2.0
+   ```
+
+3. The workflow builds the `.dmg` and the `.rpm` and creates a **draft** release with both
+   files, `SHA256SUMS` and the notes. Check it on the Releases page and click **Publish**.
+
+To test a build without making a release, run the workflow by hand (**Actions → Release →
+Run workflow**). The files are then attached to that run as artifacts.
 
 ## Using it
 

@@ -1,0 +1,204 @@
+# Builds the app for macOS (Apple Silicon .dmg) and Fedora (x86_64 .rpm).
+#
+# - Push a tag like v0.2.0: builds both and creates a *draft* GitHub Release with the
+#   .dmg, the .rpm and SHA256SUMS. Review it on the Releases page and click Publish.
+#   The tag must match "version" in app/src-tauri/tauri.conf.json.
+# - Run it by hand (Actions → Release → Run workflow): builds both and keeps them as
+#   workflow artifacts only. No release.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  version:
+    name: Read version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: read
+        name: Read version from tauri.conf.json
+        run: |
+          version=$(jq -r .version app/src-tauri/tauri.conf.json)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "App version: $version"
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match app version $version (expected v$version)"
+            exit 1
+          fi
+
+  macos:
+    name: macOS (Apple Silicon)
+    needs: version
+    runs-on: macos-15 # arm64
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      # Ad-hoc signature: seals the bundle so Gatekeeper offers "Open Anyway" instead
+      # of calling the app damaged. No Apple Developer ID, no notarisation.
+      APPLE_SIGNING_IDENTITY: "-"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install pnpm (version from package.json)
+        run: npm install -g "$(jq -r .packageManager app/package.json)"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+
+      - name: Install dependencies
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      - name: Build .app and .dmg
+        working-directory: app
+        run: pnpm tauri build --bundles app,dmg
+
+      - name: Check and collect
+        working-directory: app/src-tauri/target/release/bundle
+        run: |
+          app="macos/IR Sensor.app"
+          lipo -info "$app/Contents/MacOS/irsensor-app"
+          lipo "$app/Contents/MacOS/irsensor-app" -verify_arch arm64
+          codesign -dv "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          # No spaces in asset names: GitHub turns them into dots.
+          cp dmg/*.dmg "$GITHUB_WORKSPACE/dist/IR-Sensor_${VERSION}_aarch64.dmg"
+          ls -l "$GITHUB_WORKSPACE/dist"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: dist/*
+          if-no-files-found: error
+
+  fedora:
+    name: Fedora (x86_64)
+    needs: version
+    runs-on: ubuntu-24.04
+    # The Surface Go 2 runs Fedora 44. An rpm built on a newer Fedora may need a newer
+    # glibc than the tablet has, so keep this at the tablet's version or older (and
+    # change the rust-cache key below with it).
+    container: fedora:44
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      # Tauri's Linux prerequisites (see app/README.md), plus what the actions below need
+      # in a bare Fedora image.
+      - name: Install system packages
+        run: |
+          dnf -y install git tar gzip xz which jq file curl wget rpm \
+            webkit2gtk4.1-devel openssl-devel libappindicator-gtk3-devel \
+            librsvg2-devel libxdo-devel
+          dnf -y group install c-development
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install pnpm (version from package.json)
+        run: npm install -g "$(jq -r .packageManager app/package.json)"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+          key: fedora-44
+
+      - name: Install dependencies
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      - name: Build .rpm
+        working-directory: app
+        run: pnpm tauri build --bundles rpm
+
+      - name: Check and collect
+        working-directory: app/src-tauri/target/release/bundle
+        run: |
+          rpm=$(ls rpm/*.rpm)
+          rpm -qip "$rpm"
+          echo "--- Requires:"
+          rpm -qpR "$rpm"
+          echo "--- Files:"
+          rpm -qpl "$rpm"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "$rpm" "$GITHUB_WORKSPACE/dist/IR-Sensor_${VERSION}_x86_64.rpm"
+          ls -l "$GITHUB_WORKSPACE/dist"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fedora-rpm
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Draft GitHub Release
+    if: github.ref_type == 'tag'
+    needs: [version, macos, fedora]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums and release notes
+        run: |
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+          dmg="IR-Sensor_${VERSION}_aarch64.dmg"
+          rpm="IR-Sensor_${VERSION}_x86_64.rpm"
+          sed -e "s/{{VERSION}}/$VERSION/g" \
+              -e "s/{{DMG}}/$dmg/g" -e "s/{{RPM}}/$rpm/g" \
+              -e "s/{{DMG_SHA256}}/$(sha256sum "$dmg" | cut -d' ' -f1)/g" \
+              -e "s/{{RPM_SHA256}}/$(sha256sum "$rpm" | cut -d' ' -f1)/g" \
+              "$GITHUB_WORKSPACE/.github/release-notes.md" > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+      - name: Create or update the draft release
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            # A re-run: replace the assets, keep any notes already edited by hand.
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --draft --verify-tag \
+              --title "IR Sensor $VERSION" \
+              --notes-file "$RUNNER_TEMP/notes.md" \
+              --generate-notes
+          fi
