@@ -184,24 +184,27 @@
 	.choice.on {
 		border-color: var(--accent);
 	}
+	/* Green, as the record button is red; brighter with a pulsing dot while live */
 	.livebtn {
 		display: inline-flex;
 		align-items: center;
-		gap: 8px;
+		gap: 10px;
 		font-weight: 600;
+		background: color-mix(in srgb, var(--ok) 18%, var(--panel-2));
+		border-color: color-mix(in srgb, var(--ok) 60%, transparent);
 	}
 	.ldot {
-		width: 9px;
-		height: 9px;
+		width: 11px;
+		height: 11px;
 		border-radius: 50%;
-		background: var(--muted);
+		background: var(--ok);
+		flex: none;
 	}
 	.livebtn.on {
-		border-color: color-mix(in srgb, var(--ok) 60%, transparent);
-		background: color-mix(in srgb, var(--ok) 14%, var(--panel-2));
+		background: color-mix(in srgb, var(--ok) 28%, var(--panel-2));
+		border-color: var(--ok);
 	}
 	.livebtn.on .ldot {
-		background: var(--ok);
 		animation: pulse 1.2s ease-in-out infinite;
 	}
 	/* Same look as the record button in the panel */
