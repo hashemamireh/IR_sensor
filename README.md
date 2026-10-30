@@ -74,8 +74,27 @@ Releases are built by GitHub Actions ([`.github/workflows/release.yml`](.github/
 3. The workflow builds the `.dmg` and the `.rpm` and creates a **draft** release with both
    files, `SHA256SUMS` and the notes. Check it on the Releases page and click **Publish**.
 
-To test a build without making a release, run the workflow by hand (**Actions → Release →
-Run workflow**). The files are then attached to that run as artifacts.
+### Test builds for Fedora
+
+Every push to `main` that changes `app/` also builds a Fedora `.rpm`, without a tag or a
+release ([`.github/workflows/fedora-dev.yml`](.github/workflows/fedora-dev.yml)). You can
+also run it by hand on any branch from **Actions → Fedora dev build → Run workflow**. The
+`.rpm` is attached to the run as the artifact `fedora-rpm` and kept for 14 days. To install
+the newest one on the tablet (this needs `gh`, logged in to GitHub with `gh auth login`):
+
+```bash
+cd "$(mktemp -d)"
+gh run download --repo hashemamireh/IR_sensor -n fedora-rpm \
+  "$(gh run list --repo hashemamireh/IR_sensor -w fedora-dev.yml -s success -L 1 \
+      --json databaseId -q '.[0].databaseId')"
+sudo dnf install ./IR-Sensor_*.rpm
+```
+
+Each test build installs over the one before it, and over the last release. The next
+version's release replaces them all.
+
+To build both platforms without a release, run **Actions → Release → Run workflow**. The
+files are then attached to that run as artifacts.
 
 ## Using it
 

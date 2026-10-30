@@ -1,0 +1,107 @@
+# Test builds of the Fedora .rpm for the Surface. No tag, no release.
+#
+# - Runs on every push to main that touches app/, or by hand from any branch
+#   (Actions → Fedora dev build → Run workflow).
+# - The .rpm is kept as an artifact of the run, named "fedora-rpm", for 14 days.
+#   On the Surface, install the newest one with:
+#
+#     cd "$(mktemp -d)"
+#     gh run download --repo hashemamireh/IR_sensor -n fedora-rpm \
+#       "$(gh run list --repo hashemamireh/IR_sensor -w fedora-dev.yml -s success -L 1 \
+#           --json databaseId -q '.[0].databaseId')"
+#     sudo dnf install ./IR-Sensor_*.rpm
+#
+# The rpm's release is 1.dev.<run number>.g<commit> (releases use 1), so each dev build
+# upgrades the one before it and the last release of the same version, and the next
+# version's release upgrades all of them.
+
+name: Fedora dev build
+
+on:
+  push:
+    branches: [main]
+    paths: ["app/**", ".github/workflows/fedora-dev.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fedora-dev-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "24"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  fedora:
+    name: Fedora (x86_64)
+    runs-on: ubuntu-24.04
+    # Keep in step with the fedora job in release.yml: the Surface's Fedora version or older.
+    container: fedora:44
+    steps:
+      - name: Install system packages
+        run: |
+          dnf -y install git tar gzip xz which jq file curl wget rpm \
+            webkit2gtk4.1-devel openssl-devel libappindicator-gtk3-devel \
+            librsvg2-devel libxdo-devel
+          dnf -y group install c-development
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install pnpm (version from package.json)
+        run: npm install -g "$(jq -r .packageManager app/package.json)"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Same key as release.yml, so dev builds and releases share the Rust cache.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+          key: fedora-44
+
+      - name: Install dependencies
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      - name: Build .rpm
+        working-directory: app
+        run: |
+          rpm_release="1.dev.${GITHUB_RUN_NUMBER}.g${GITHUB_SHA::7}"
+          pnpm tauri build --bundles rpm \
+            --config "{\"bundle\":{\"linux\":{\"rpm\":{\"release\":\"$rpm_release\"}}}}"
+
+      - name: Check and collect
+        working-directory: app/src-tauri/target/release/bundle
+        run: |
+          rpm=$(ls rpm/*.rpm)
+          rpm -qip "$rpm"
+          version=$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$rpm")
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "$rpm" "$GITHUB_WORKSPACE/dist/IR-Sensor_${version}_x86_64.rpm"
+          ls -l "$GITHUB_WORKSPACE/dist"
+          {
+            echo "### Fedora dev build: \`IR-Sensor_${version}_x86_64.rpm\`"
+            echo
+            echo "Download it from **Artifacts → fedora-rpm** below, or on the Surface:"
+            echo
+            echo '```bash'
+            echo "gh run download ${GITHUB_RUN_ID} --repo ${GITHUB_REPOSITORY} -n fedora-rpm"
+            echo "sudo dnf install ./IR-Sensor_${version}_x86_64.rpm"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fedora-rpm
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
