@@ -261,6 +261,11 @@ python3 tools/check_irec.py 00001z.irec --period-ms 250
 
 ### 1.10 Deep sleep and wake
 
+- [ ] Settings → Sleep after → 5min, then leave the device alone (no app requests either).
+  After ~4 min 50 s the screen shows "Going to sleep in 10 s" and the LED blinks. Turn the
+  encoder once: the warning disappears and the countdown restarts. Leave it again and let it
+  sleep; then wake it (below) and set Sleep after back to 15min.
+
 - [ ] Menu → Deep Sleep → Yes: OLED and LED go dark; log shows
   `power: Entering deep sleep — hold the button ~2 s to wake`; WiFi disappears.
 - [ ] A short tap: the chip wakes briefly and logs
@@ -370,11 +375,11 @@ Fill in as you go; numbers marked → feed back into code or the spec.
 
 | Item | Value |
 | :--- | :--- |
-| → OLED orientation (`OLED_FLIP`) | |
-| → Encoder counts per click / direction | |
-| Brightness levels look right? | |
-| Brightest OPT101 output (counts / mV), any clipping? | |
-| Device mV vs multimeter on the OPT101 output | |
+| → OLED orientation (`OLED_FLIP`) | PASS |
+| → Encoder counts per click / direction | PASS |
+| Brightness levels look right? | PASS |
+| Brightest OPT101 output (counts / mV), any clipping? | 2544 (full spectrum, not just IR)|
+| Device mV vs multimeter on the OPT101 output | PASS: `signal   min 2475  mean 2510.0  max 2544` compared to `2.540V` multimeter readin  |
 | → Actual rate @ 1 kHz (Hz) | |
 | → Actual rate @ 2 kHz (Hz) | |
 | → Actual rate @ 5 kHz (Hz) | |
@@ -385,6 +390,6 @@ Fill in as you go; numbers marked → feed back into code or the spec.
 | Save time, 120 s @ 20 kHz (4.8 MB) | |
 | Compression speed (s per MB) and ratio | |
 | NEC remote leader burst measured (ms) | |
-| Battery mV vs multimeter | |
+| Battery mV vs multimeter | PASS: Pretty much identical |
 | Current: idle / screen off / recording | |
 | Current: deep sleep | |
