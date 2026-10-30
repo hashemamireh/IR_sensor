@@ -1,0 +1,206 @@
+<title>IR Sensor Icon Options</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500&display=swap">
+<style>
+  /* Layout: one column of concept cards; each card shows the icon on a dark and a light launcher strip, at real sizes and as zoomed pixels. */
+  :root {
+    --bg: #0e1014;
+    --panel: #151922;
+    --line: #262d3b;
+    --fg: #e6ebf3;
+    --muted: #8d97a8;
+    --accent: #5aa9ff;
+    --ir: #ff3d6e;
+    --strip-dark: #232428;
+    --strip-light: #ececef;
+    --strip-light-fg: #4a4f59;
+    --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+    --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    color-scheme: dark;
+  }
+  body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--font-body); }
+  .wrap {
+    max-width: 980px; margin: 0 auto;
+    padding-block: 40px 64px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: grid; gap: 28px;
+  }
+  header { display: grid; gap: 10px; }
+  .eyebrow { font: 500 12px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  h1 { font: 600 34px/1.1 var(--font-display); margin: 0; text-wrap: balance; }
+  header p { margin: 0; color: var(--muted); max-width: 66ch; }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .controls span { font: 500 12px/1 var(--font-mono); color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    font: 500 13px/1 var(--font-body); color: var(--muted); background: transparent;
+    border: 0; padding: 9px 14px; cursor: pointer;
+  }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #07121f; }
+  .seg button:focus-visible, .master:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .pick { border-left: 3px solid var(--ir); padding: 4px 0 4px 16px; max-width: 70ch; }
+  .pick strong { font-family: var(--font-display); font-weight: 600; font-size: 17px; }
+  .pick p { margin: 4px 0 0; color: var(--muted); }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px; display: grid; gap: 14px; }
+  .card-head { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; align-items: baseline; }
+  .num { font: 600 30px/1 var(--font-display); color: var(--accent); grid-row: span 2; }
+  .card h2 { font: 600 21px/1.2 var(--font-display); margin: 0; }
+  .card-head p { margin: 0; color: var(--fg); grid-column: 2; }
+  .linux { grid-column: 2; font: 400 12.5px/1.4 var(--font-mono); color: var(--muted); }
+
+  .strip { border-radius: 10px; padding: 16px; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 22px; overflow-x: auto; }
+  .strip.dark { background: var(--strip-dark); color: #a7adb8; }
+  .strip.light { background: var(--strip-light); color: var(--strip-light-fg); }
+  .strip-label { flex-basis: 100%; font: 500 11px/1 var(--font-mono); letter-spacing: .07em; text-transform: uppercase; }
+  figure { margin: 0; display: grid; justify-items: center; gap: 8px; }
+  figcaption { font: 400 11px/1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .master { padding: 0; border: 0; background: none; cursor: zoom-in; border-radius: 12px; }
+  .master img { width: 168px; height: 168px; display: block; }
+  img.s128 { width: 128px; height: 128px; }
+  img.s32 { width: 32px; height: 32px; }
+  img.s16 { width: 16px; height: 16px; }
+  .px { display: flex; flex-wrap: wrap; gap: 22px; align-items: flex-end; padding-left: 22px; border-left: 1px dashed currentColor; }
+  canvas.zoom { image-rendering: pixelated; image-rendering: crisp-edges; display: block; }
+  canvas.z32 { width: 96px; height: 96px; }
+  canvas.z16 { width: 64px; height: 64px; }
+
+  .note { color: var(--muted); font-size: 13.5px; max-width: 72ch; margin: 0; }
+  .note code { font-family: var(--font-mono); font-size: 12.5px; color: var(--fg); }
+
+  .overlay {
+    position: fixed; inset: 0; background: rgba(5, 6, 9, .88); display: grid; place-items: center;
+    padding: 24px; z-index: 20; cursor: zoom-out;
+  }
+  .overlay img { width: min(1024px, 92vw, 86vh); height: auto; aspect-ratio: 1; }
+  .overlay p { margin: 10px 0 0; text-align: center; color: var(--muted); font: 400 12px/1 var(--font-mono); }
+
+  @media (max-width: 560px) {
+    h1 { font-size: 28px; }
+    .px { border-left: 0; padding-left: 0; }
+    .master img { width: 128px; height: 128px; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">IR Sensor · app icon · round 1</div>
+    <h1>Five icon concepts for the tablet app</h1>
+    <p>Each concept sits on a dark and a light launcher background. Sizes are in points, the way the macOS Dock and GNOME count them. The pixel views on the right are true 32×32 and 16×16 rasters, blown up, which is what the <code>32x32.png</code> and <code>icon.ico</code> files will contain.</p>
+  </header>
+
+  <div class="controls">
+    <span>Shape</span>
+    <div class="seg" role="group" aria-label="Icon shape">
+      <button type="button" id="shape-mac" aria-pressed="true" data-shape="mac">macOS rounded square</button>
+      <button type="button" id="shape-square" aria-pressed="false" data-shape="square">Full-bleed square (Linux)</button>
+    </div>
+  </div>
+
+  <div class="pick" id="pick"></div>
+
+  <main id="cards" class="wrap" style="padding:0;gap:20px"></main>
+
+  <p class="note">The macOS shape follows Apple's grid: an 824-point plate centred on a 1024 canvas, corners at 22.5%, with a soft shadow inside the canvas. Tauri ships the same PNG to Linux, where GNOME shows it as is, so the rounded square also works on Fedora. Click any large icon to see the 1024 master.</p>
+</div>
+
+<script>
+  const CONCEPTS = [{"n":1,"id":"01-sensor-eye","name":"Sensor eye","line":"An eye whose pupil glows infrared: the device sees light you cannot.","linux":"Works full-bleed. The centred shape scales up cleanly.","mac":"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1024\" height=\"1024\" viewBox=\"0 0 1024 1024\">\n  <defs>\n    <linearGradient id=\"plate\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n      <stop offset=\"0\" stop-color=\"#1d2331\"/>\n      <stop offset=\"1\" stop-color=\"#0e1014\"/>\n    </linearGradient>\n    <filter id=\"shadow\" x=\"-10%\" y=\"-10%\" width=\"120%\" height=\"125%\">\n      <feDropShadow dx=\"0\" dy=\"12\" stdDeviation=\"14\" flood-color=\"#000\" flood-opacity=\".35\"/>\n    </filter>\n    <filter id=\"glow\" x=\"-60%\" y=\"-60%\" width=\"220%\" height=\"220%\">\n      <feGaussianBlur stdDeviation=\"26\"/>\n    </filter>\n    <radialGradient id=\"pupil\" cx=\".42\" cy=\".38\" r=\".7\">\n      <stop offset=\"0\" stop-color=\"#ffe0e8\"/>\n      <stop offset=\".35\" stop-color=\"#ff3d6e\"/>\n      <stop offset=\"1\" stop-color=\"#c3124f\"/>\n    </radialGradient>\n  </defs>\n  <rect x=\"100\" y=\"100\" width=\"824\" height=\"824\" rx=\"185\" fill=\"url(#plate)\" filter=\"url(#shadow)\"/>\n  <rect x=\"102\" y=\"102\" width=\"820\" height=\"820\" rx=\"183\" fill=\"none\" stroke=\"#fff\" stroke-opacity=\".09\" stroke-width=\"4\"/>\n  <path d=\"M206 512 C320 290 704 290 818 512 C704 734 320 734 206 512 Z\" fill=\"#0a0c10\" stroke=\"#5aa9ff\" stroke-width=\"60\" stroke-linejoin=\"round\"/>\n  <circle cx=\"512\" cy=\"512\" r=\"128\" fill=\"#ff3d6e\" opacity=\".85\" filter=\"url(#glow)\"/>\n  <circle cx=\"512\" cy=\"512\" r=\"108\" fill=\"url(#pupil)\"/>\n  <circle cx=\"474\" cy=\"472\" r=\"24\" fill=\"#fff\" opacity=\".85\"/>\n</svg>\n","square":"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1024\" height=\"1024\" viewBox=\"0 0 1024 1024\">\n  <defs>\n    <linearGradient id=\"plate\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n      <stop offset=\"0\" stop-color=\"#1d2331\"/>\n      <stop offset=\"1\" stop-color=\"#0e1014\"/>\n    </linearGradient>\n    <filter id=\"shadow\" x=\"-10%\" y=\"-10%\" width=\"120%\" height=\"125%\">\n      <feDropShadow dx=\"0\" dy=\"12\" stdDeviation=\"14\" flood-color=\"#000\" flood-opacity=\".35\"/>\n    </filter>\n    <filter id=\"glow\" x=\"-60%\" y=\"-60%\" width=\"220%\" height=\"220%\">\n      <feGaussianBlur stdDeviation=\"26\"/>\n    </filter>\n    <radialGradient id=\"pupil\" cx=\".42\" cy=\".38\" r=\".7\">\n      <stop offset=\"0\" stop-color=\"#ffe0e8\"/>\n      <stop offset=\".35\" stop-color=\"#ff3d6e\"/>\n      <stop offset=\"1\" stop-color=\"#c3124f\"/>\n    </radialGradient>\n  </defs>\n  <rect width=\"1024\" height=\"1024\" fill=\"url(#plate)\"/><g transform=\"translate(512 512) scale(1.16) translate(-512 -512)\">\n  <path d=\"M206 512 C320 290 704 290 818 512 C704 734 320 734 206 512 Z\" fill=\"#0a0c10\" stroke=\"#5aa9ff\" stroke-width=\"60\" stroke-linejoin=\"round\"/>\n  <circle cx=\"512\" cy=\"512\" r=\"128\" fill=\"#ff3d6e\" opacity=\".85\" filter=\"url(#glow)\"/>\n  <circle cx=\"512\" cy=\"512\" r=\"108\" fill=\"url(#pupil)\"/>\n  <circle cx=\"474\" cy=\"472\" r=\"24\" fill=\"#fff\" opacity=\".85\"/>\n  </g>\n</svg>\n"},{"n":2,"id":"02-pulse-train","name":"Pulse train","line":"Square pulses like the app’s graph, with the second pulse lit in infrared.","linux":"Works full-bleed. The wide waveform fills a square well.","mac":"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1024\" height=\"1024\" viewBox=\"0 0 1024 1024\">\n  <defs>\n    <linearGradient id=\"plate\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n      <stop offset=\"0\" stop-color=\"#1d2331\"/>\n      <stop offset=\"1\" stop-color=\"#0e1014\"/>\n    </linearGradient>\n    <filter id=\"shadow\" x=\"-10%\" y=\"-10%\" width=\"120%\" height=\"125%\">\n      <feDropShadow dx=\"0\" dy=\"12\" stdDeviation=\"14\" flood-color=\"#000\" flood-opacity=\".35\"/>\n    </filter>\n    <filter id=\"glow\" x=\"-60%\" y=\"-60%\" width=\"220%\" height=\"220%\">\n      <feGaussianBlur stdDeviation=\"26\"/>\n    </filter>\n  </defs>\n  <rect x=\"100\" y=\"100\" width=\"824\" height=\"824\" rx=\"185\" fill=\"url(#plate)\" filter=\"url(#shadow)\"/>\n  <rect x=\"102\" y=\"102\" width=\"820\" height=\"820\" rx=\"183\" fill=\"none\" stroke=\"#fff\" stroke-opacity=\".09\" stroke-width=\"4\"/>\n  <path d=\"M584 656 V368 H724 V656\" fill=\"none\" stroke=\"#ff3d6e\" stroke-width=\"104\" stroke-linejoin=\"round\" stroke-linecap=\"round\" opacity=\".9\" filter=\"url(#glow)\"/>\n  <path d=\"M196 656 H300 V368 H440 V656 H584\" fill=\"none\" stroke=\"#5aa9ff\" stroke-width=\"80\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>\n  <path d=\"M724 656 H828\" fill=\"none\" stroke=\"#5aa9ff\" stroke-width=\"80\" stroke-linecap=\"round\"/>\n  <path d=\"M584 656 V368 H724 V656\" fill=\"none\" stroke=\"#ff3d6e\" stroke-width=\"80\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>\n</svg>\n","square":"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1024\" height=\"1024\" viewBox=\"0 0 1024 1024\">\n  <defs>\n    <linearGradient id=\"plate\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n      <stop offset=\"0\" stop-color=\"#1d2331\"/>\n      <stop offset=\"1\" stop-color=\"#0e1014\"/>\n    </linearGradient>\n    <filter id=\"shadow\" x=\"-10%\" y=\"-10%\" width=\"120%\" height=\"125%\">\n      <feDropShadow dx=\"0\" dy=\"12\" stdDeviation=\"14\" flood-color=\"#000\" flood-opacity=\".35\"/>\n    </filter>\n    <filter id=\"glow\" x=\"-60%\" y=\"-60%\" width=\"220%\" height=\"220%\">\n      <feGaussianBlur stdDeviation=\"26\"/>\n    </filter>\n  </defs>\n  <rect width=\"1024\" height=\"1024\" fill=\"url(#plate)\"/><g transform=\"translate(512 512) scale(1.16) translate(-512 -512)\">\n  <path d=\"M584 656 V368 H724 V656\" fill=\"none\" stroke=\"#ff3d6e\" stroke-width=\"104\" stroke-linejoin=\"round\" stroke-linecap=\"round\" opacity=\".9\" filter=\"url(#glow)\"/>\n  <path d=\"M196 656 H300 V368 H440 V656 H584\" fill=\"none\" stroke=\"#5aa9ff\" stroke-width=\"80\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>\n  <path d=\"M724 656 H828\" fill=\"none\" stroke=\"#5aa9ff\" stroke-width=\"80\" stroke-linecap=\"round\"/>\n  <path d=\"M584 656 V368 H724 V656\" fill=\"none\" stroke=\"#ff3d6e\" stroke-width=\"80\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>\n  </g>\n</svg>\n"},{"n":3,"id":"03-pulse-timer","name":"Pulse timer","line":"A stopwatch ring around one infrared pulse: timing light.","linux":"Works full-bleed, though the crown gets close to the top edge.","mac":"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1024\" height=\"1024\" viewBox=\"0 0 1024 1024\">\n  <defs>\n    <linearGradient id=\"plate\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n      <stop offset=\"0\" stop-color=\"#1d2331\"/>\n      <stop offset=\"1\" stop-color=\"#0e1014\"/>\n    </linearGradient>\n    <filter id=\"shadow\" x=\"-10%\" y=\"-10%\" width=\"120%\" height=\"125%\">\n      <feDropShadow dx=\"0\" dy=\"12\" stdDeviation=\"14\" flood-color=\"#000\" flood-opacity=\".35\"/>\n    </filter>\n    <filter id=\"glow\" x=\"-60%\" y=\"-60%\" width=\"220%\" height=\"220%\">\n      <feGaussianBlur stdDeviation=\"26\"/>\n    </filter>\n  </defs>\n  <rect x=\"100\" y=\"100\" width=\"824\" height=\"824\" rx=\"185\" fill=\"url(#plate)\" filter=\"url(#shadow)\"/>\n  <rect x=\"102\" y=\"102\" width=\"820\" height=\"820\" rx=\"183\" fill=\"none\" stroke=\"#fff\" stroke-opacity=\".09\" stroke-width=\"4\"/>\n  <rect x=\"470\" y=\"196\" width=\"84\" height=\"76\" rx=\"16\" fill=\"#5aa9ff\"/>\n  <circle cx=\"512\" cy=\"548\" r=\"262\" fill=\"#0a0c10\" stroke=\"#5aa9ff\" stroke-width=\"56\"/>\n  <path d=\"M348 610 H440 V470 H584 V610 H676\" fill=\"none\" stroke=\"#ff3d6e\" stroke-width=\"74\" stroke-linejoin=\"round\" stroke-linecap=\"round\" opacity=\".9\" filter=\"url(#glow)\"/>\n  <path d=\"M348 610 H440 V470 H584 V610 H676\" fill=\"none\" stroke=\"#ff3d6e\" stroke-width=\"56\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>\n</svg>\n","square":"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1024\" height=\"1024\" viewBox=\"0 0 1024 1024\">\n  <defs>\n    <linearGradient id=\"plate\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n      <stop offset=\"0\" stop-color=\"#1d2331\"/>\n      <stop offset=\"1\" stop-color=\"#0e1014\"/>\n    </linearGradient>\n    <filter id=\"shadow\" x=\"-10%\" y=\"-10%\" width=\"120%\" height=\"125%\">\n      <feDropShadow dx=\"0\" dy=\"12\" stdDeviation=\"14\" flood-color=\"#000\" flood-opacity=\".35\"/>\n    </filter>\n    <filter id=\"glow\" x=\"-60%\" y=\"-60%\" width=\"220%\" height=\"220%\">\n      <feGaussianBlur stdDeviation=\"26\"/>\n    </filter>\n  </defs>\n  <rect width=\"1024\" height=\"1024\" fill=\"url(#plate)\"/><g transform=\"translate(512 512) scale(1.16) translate(-512 -512)\">\n  <rect x=\"470\" y=\"196\" width=\"84\" height=\"76\" rx=\"16\" fill=\"#5aa9ff\"/>\n  <circle cx=\"512\" cy=\"548\" r=\"262\" fill=\"#0a0c10\" stroke=\"#5aa9ff\" stroke-width=\"56\"/>\n  <path d=\"M348 610 H440 V470 H584 V610 H676\" fill=\"none\" stroke=\"#ff3d6e\" stroke-width=\"74\" stroke-linejoin=\"round\" stroke-linecap=\"round\" opacity=\".9\" filter=\"url(#glow)\"/>\n  <path d=\"M348 610 H440 V470 H584 V610 H676\" fill=\"none\" stroke=\"#ff3d6e\" stroke-width=\"56\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>\n  </g>\n</svg>\n"},{"n":4,"id":"04-beam-monogram","name":"Beam monogram","line":"A blue R with a glowing infrared bar beside it, so the pair reads “IR”.","linux":"Works full-bleed. Letterforms hold up at any crop.","mac":"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1024\" height=\"1024\" viewBox=\"0 0 1024 1024\">\n  <defs>\n    <linearGradient id=\"plate\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n      <stop offset=\"0\" stop-color=\"#1d2331\"/>\n      <stop offset=\"1\" stop-color=\"#0e1014\"/>\n    </linearGradient>\n    <filter id=\"shadow\" x=\"-10%\" y=\"-10%\" width=\"120%\" height=\"125%\">\n      <feDropShadow dx=\"0\" dy=\"12\" stdDeviation=\"14\" flood-color=\"#000\" flood-opacity=\".35\"/>\n    </filter>\n    <filter id=\"glow\" x=\"-60%\" y=\"-60%\" width=\"220%\" height=\"220%\">\n      <feGaussianBlur stdDeviation=\"26\"/>\n    </filter>\n    <linearGradient id=\"beam-i\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n      <stop offset=\"0\" stop-color=\"#ff8aa6\"/>\n      <stop offset=\"1\" stop-color=\"#c3124f\"/>\n    </linearGradient>\n  </defs>\n  <rect x=\"100\" y=\"100\" width=\"824\" height=\"824\" rx=\"185\" fill=\"url(#plate)\" filter=\"url(#shadow)\"/>\n  <rect x=\"102\" y=\"102\" width=\"820\" height=\"820\" rx=\"183\" fill=\"none\" stroke=\"#fff\" stroke-opacity=\".09\" stroke-width=\"4\"/>\n  <rect x=\"270\" y=\"290\" width=\"96\" height=\"444\" rx=\"20\" fill=\"#ff3d6e\" opacity=\".85\" filter=\"url(#glow)\"/>\n  <rect x=\"270\" y=\"290\" width=\"96\" height=\"444\" rx=\"20\" fill=\"url(#beam-i)\"/>\n  <path d=\"M470 734 V338 H600 A108 108 0 0 1 600 554 H470 M582 554 L716 734\" fill=\"none\" stroke=\"#5aa9ff\" stroke-width=\"96\" stroke-linejoin=\"round\" stroke-linecap=\"butt\"/>\n</svg>\n","square":"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1024\" height=\"1024\" viewBox=\"0 0 1024 1024\">\n  <defs>\n    <linearGradient id=\"plate\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n      <stop offset=\"0\" stop-color=\"#1d2331\"/>\n      <stop offset=\"1\" stop-color=\"#0e1014\"/>\n    </linearGradient>\n    <filter id=\"shadow\" x=\"-10%\" y=\"-10%\" width=\"120%\" height=\"125%\">\n      <feDropShadow dx=\"0\" dy=\"12\" stdDeviation=\"14\" flood-color=\"#000\" flood-opacity=\".35\"/>\n    </filter>\n    <filter id=\"glow\" x=\"-60%\" y=\"-60%\" width=\"220%\" height=\"220%\">\n      <feGaussianBlur stdDeviation=\"26\"/>\n    </filter>\n    <linearGradient id=\"beam-i\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n      <stop offset=\"0\" stop-color=\"#ff8aa6\"/>\n      <stop offset=\"1\" stop-color=\"#c3124f\"/>\n    </linearGradient>\n  </defs>\n  <rect width=\"1024\" height=\"1024\" fill=\"url(#plate)\"/><g transform=\"translate(512 512) scale(1.16) translate(-512 -512)\">\n  <rect x=\"270\" y=\"290\" width=\"96\" height=\"444\" rx=\"20\" fill=\"#ff3d6e\" opacity=\".85\" filter=\"url(#glow)\"/>\n  <rect x=\"270\" y=\"290\" width=\"96\" height=\"444\" rx=\"20\" fill=\"url(#beam-i)\"/>\n  <path d=\"M470 734 V338 H600 A108 108 0 0 1 600 554 H470 M582 554 L716 734\" fill=\"none\" stroke=\"#5aa9ff\" stroke-width=\"96\" stroke-linejoin=\"round\" stroke-linecap=\"butt\"/>\n  </g>\n</svg>\n"},{"n":5,"id":"05-beam-detector","name":"Beam to detector","line":"An infrared beam spreading from a source and landing on a blue detector.","linux":"Works full-bleed. The horizontal layout leaves some empty space top and bottom.","mac":"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1024\" height=\"1024\" viewBox=\"0 0 1024 1024\">\n  <defs>\n    <linearGradient id=\"plate\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n      <stop offset=\"0\" stop-color=\"#1d2331\"/>\n      <stop offset=\"1\" stop-color=\"#0e1014\"/>\n    </linearGradient>\n    <filter id=\"shadow\" x=\"-10%\" y=\"-10%\" width=\"120%\" height=\"125%\">\n      <feDropShadow dx=\"0\" dy=\"12\" stdDeviation=\"14\" flood-color=\"#000\" flood-opacity=\".35\"/>\n    </filter>\n    <filter id=\"glow\" x=\"-60%\" y=\"-60%\" width=\"220%\" height=\"220%\">\n      <feGaussianBlur stdDeviation=\"26\"/>\n    </filter>\n    <linearGradient id=\"beam\" x1=\"292\" y1=\"0\" x2=\"640\" y2=\"0\" gradientUnits=\"userSpaceOnUse\">\n      <stop offset=\"0\" stop-color=\"#ff3d6e\" stop-opacity=\".95\"/>\n      <stop offset=\"1\" stop-color=\"#ff3d6e\" stop-opacity=\".45\"/>\n    </linearGradient>\n  </defs>\n  <rect x=\"100\" y=\"100\" width=\"824\" height=\"824\" rx=\"185\" fill=\"url(#plate)\" filter=\"url(#shadow)\"/>\n  <rect x=\"102\" y=\"102\" width=\"820\" height=\"820\" rx=\"183\" fill=\"none\" stroke=\"#fff\" stroke-opacity=\".09\" stroke-width=\"4\"/>\n  <path d=\"M692 694 V786 M766 694 V786\" stroke=\"#3b4a63\" stroke-width=\"26\" stroke-linecap=\"round\"/>\n  <path d=\"M262 482 L640 396 V628 L262 542 Z\" fill=\"url(#beam)\"/>\n  <circle cx=\"262\" cy=\"512\" r=\"70\" fill=\"#ff3d6e\" filter=\"url(#glow)\"/>\n  <circle cx=\"262\" cy=\"512\" r=\"50\" fill=\"#ffd6e0\"/>\n  <rect x=\"640\" y=\"330\" width=\"172\" height=\"364\" rx=\"40\" fill=\"#5aa9ff\"/>\n  <rect x=\"628\" y=\"396\" width=\"44\" height=\"232\" rx=\"22\" fill=\"#ff3d6e\" opacity=\".9\" filter=\"url(#glow)\"/>\n  <rect x=\"640\" y=\"396\" width=\"34\" height=\"232\" rx=\"17\" fill=\"#ffd6e0\"/>\n</svg>\n","square":"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1024\" height=\"1024\" viewBox=\"0 0 1024 1024\">\n  <defs>\n    <linearGradient id=\"plate\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n      <stop offset=\"0\" stop-color=\"#1d2331\"/>\n      <stop offset=\"1\" stop-color=\"#0e1014\"/>\n    </linearGradient>\n    <filter id=\"shadow\" x=\"-10%\" y=\"-10%\" width=\"120%\" height=\"125%\">\n      <feDropShadow dx=\"0\" dy=\"12\" stdDeviation=\"14\" flood-color=\"#000\" flood-opacity=\".35\"/>\n    </filter>\n    <filter id=\"glow\" x=\"-60%\" y=\"-60%\" width=\"220%\" height=\"220%\">\n      <feGaussianBlur stdDeviation=\"26\"/>\n    </filter>\n    <linearGradient id=\"beam\" x1=\"292\" y1=\"0\" x2=\"640\" y2=\"0\" gradientUnits=\"userSpaceOnUse\">\n      <stop offset=\"0\" stop-color=\"#ff3d6e\" stop-opacity=\".95\"/>\n      <stop offset=\"1\" stop-color=\"#ff3d6e\" stop-opacity=\".45\"/>\n    </linearGradient>\n  </defs>\n  <rect width=\"1024\" height=\"1024\" fill=\"url(#plate)\"/><g transform=\"translate(512 512) scale(1.16) translate(-512 -512)\">\n  <path d=\"M692 694 V786 M766 694 V786\" stroke=\"#3b4a63\" stroke-width=\"26\" stroke-linecap=\"round\"/>\n  <path d=\"M262 482 L640 396 V628 L262 542 Z\" fill=\"url(#beam)\"/>\n  <circle cx=\"262\" cy=\"512\" r=\"70\" fill=\"#ff3d6e\" filter=\"url(#glow)\"/>\n  <circle cx=\"262\" cy=\"512\" r=\"50\" fill=\"#ffd6e0\"/>\n  <rect x=\"640\" y=\"330\" width=\"172\" height=\"364\" rx=\"40\" fill=\"#5aa9ff\"/>\n  <rect x=\"628\" y=\"396\" width=\"44\" height=\"232\" rx=\"22\" fill=\"#ff3d6e\" opacity=\".9\" filter=\"url(#glow)\"/>\n  <rect x=\"640\" y=\"396\" width=\"34\" height=\"232\" rx=\"17\" fill=\"#ffd6e0\"/>\n  </g>\n</svg>\n"}];
+  const PICK = 2;
+  const PICK_WHY = 'It is the app’s own picture, the square pulses you see on the graph, so it says what the app does rather than just its name. The thick zig-zag keeps its shape at 16 px and fills a full-bleed square as well as the rounded one. Runner-up: 4 is the most legible at 16 px, but it spells two letters and looks more generic.';
+  let shape = 'mac';
+
+  const url = (svg) => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  const loaded = new Map();
+  function loadImg(src) {
+    if (!loaded.has(src)) {
+      loaded.set(src, new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; }));
+    }
+    return loaded.get(src);
+  }
+  // Downscale by halving so the small rasters resemble what an icon tool produces.
+  async function raster(src, size, canvas) {
+    const img = await loadImg(src);
+    let cur = document.createElement('canvas');
+    cur.width = cur.height = 512;
+    let ctx = cur.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, 512, 512);
+    while (cur.width > size) {
+      const next = document.createElement('canvas');
+      next.width = next.height = cur.width / 2;
+      const nctx = next.getContext('2d');
+      nctx.imageSmoothingQuality = 'high';
+      nctx.drawImage(cur, 0, 0, next.width, next.height);
+      cur = next;
+    }
+    canvas.width = canvas.height = size;
+    canvas.getContext('2d').drawImage(cur, 0, 0);
+  }
+
+  function strip(c, tone) {
+    const src = url(c[shape]);
+    const el = document.createElement('div');
+    el.className = 'strip ' + tone;
+    el.innerHTML = `
+      <div class="strip-label">${tone === 'dark' ? 'Dark · Dock in dark mode, GNOME dark' : 'Light · Dock in light mode, GNOME light'}</div>
+      <figure><button class="master" type="button" aria-label="Open ${c.name} at 1024"><img alt="${c.name} icon" src="${src}"></button><figcaption>1024 master</figcaption></figure>
+      <figure><img class="s128" alt="" src="${src}"><figcaption>128</figcaption></figure>
+      <figure><img class="s32" alt="" src="${src}"><figcaption>32</figcaption></figure>
+      <figure><img class="s16" alt="" src="${src}"><figcaption>16</figcaption></figure>
+      <div class="px">
+        <figure><canvas class="zoom z32"></canvas><figcaption>32 px ×3</figcaption></figure>
+        <figure><canvas class="zoom z16"></canvas><figcaption>16 px ×4</figcaption></figure>
+      </div>`;
+    raster(src, 32, el.querySelector('.z32'));
+    raster(src, 16, el.querySelector('.z16'));
+    el.querySelector('.master').addEventListener('click', () => openBig(c, src));
+    return el;
+  }
+
+  function render() {
+    const root = document.getElementById('cards');
+    root.replaceChildren();
+    for (const c of CONCEPTS) {
+      const card = document.createElement('section');
+      card.className = 'card';
+      card.id = 'c' + c.n;
+      card.innerHTML = `
+        <div class="card-head">
+          <div class="num">${c.n}</div>
+          <h2>${c.name}</h2>
+          <p>${c.line}</p>
+          <div class="linux">Linux: ${c.linux}</div>
+        </div>`;
+      card.append(strip(c, 'dark'), strip(c, 'light'));
+      root.append(card);
+    }
+  }
+
+  function openBig(c, src) {
+    const o = document.createElement('div');
+    o.className = 'overlay';
+    o.innerHTML = `<div><img alt="${c.name} at 1024" src="${src}"><p>${c.n} · ${c.name} · 1024 × 1024 · click to close</p></div>`;
+    const close = () => { o.remove(); document.removeEventListener('keydown', esc); };
+    const esc = (e) => { if (e.key === 'Escape') close(); };
+    o.addEventListener('click', close);
+    document.addEventListener('keydown', esc);
+    document.body.append(o);
+  }
+
+  const pick = CONCEPTS.find((c) => c.n === PICK);
+  document.getElementById('pick').innerHTML = `<strong>My pick: ${pick.n} · ${pick.name}</strong><p>${PICK_WHY}</p>`;
+
+  for (const b of document.querySelectorAll('.seg button')) {
+    b.addEventListener('click', () => {
+      shape = b.dataset.shape;
+      for (const x of document.querySelectorAll('.seg button')) x.setAttribute('aria-pressed', String(x === b));
+      render();
+    });
+  }
+  render();
+</script>

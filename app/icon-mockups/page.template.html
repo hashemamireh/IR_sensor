@@ -1,0 +1,206 @@
+<title>IR Sensor Icon Options</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500&display=swap">
+<style>
+  /* Layout: one column of concept cards; each card shows the icon on a dark and a light launcher strip, at real sizes and as zoomed pixels. */
+  :root {
+    --bg: #0e1014;
+    --panel: #151922;
+    --line: #262d3b;
+    --fg: #e6ebf3;
+    --muted: #8d97a8;
+    --accent: #5aa9ff;
+    --ir: #ff3d6e;
+    --strip-dark: #232428;
+    --strip-light: #ececef;
+    --strip-light-fg: #4a4f59;
+    --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+    --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    color-scheme: dark;
+  }
+  body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--font-body); }
+  .wrap {
+    max-width: 980px; margin: 0 auto;
+    padding-block: 40px 64px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: grid; gap: 28px;
+  }
+  header { display: grid; gap: 10px; }
+  .eyebrow { font: 500 12px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  h1 { font: 600 34px/1.1 var(--font-display); margin: 0; text-wrap: balance; }
+  header p { margin: 0; color: var(--muted); max-width: 66ch; }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .controls span { font: 500 12px/1 var(--font-mono); color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    font: 500 13px/1 var(--font-body); color: var(--muted); background: transparent;
+    border: 0; padding: 9px 14px; cursor: pointer;
+  }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #07121f; }
+  .seg button:focus-visible, .master:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .pick { border-left: 3px solid var(--ir); padding: 4px 0 4px 16px; max-width: 70ch; }
+  .pick strong { font-family: var(--font-display); font-weight: 600; font-size: 17px; }
+  .pick p { margin: 4px 0 0; color: var(--muted); }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px; display: grid; gap: 14px; }
+  .card-head { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; align-items: baseline; }
+  .num { font: 600 30px/1 var(--font-display); color: var(--accent); grid-row: span 2; }
+  .card h2 { font: 600 21px/1.2 var(--font-display); margin: 0; }
+  .card-head p { margin: 0; color: var(--fg); grid-column: 2; }
+  .linux { grid-column: 2; font: 400 12.5px/1.4 var(--font-mono); color: var(--muted); }
+
+  .strip { border-radius: 10px; padding: 16px; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 22px; overflow-x: auto; }
+  .strip.dark { background: var(--strip-dark); color: #a7adb8; }
+  .strip.light { background: var(--strip-light); color: var(--strip-light-fg); }
+  .strip-label { flex-basis: 100%; font: 500 11px/1 var(--font-mono); letter-spacing: .07em; text-transform: uppercase; }
+  figure { margin: 0; display: grid; justify-items: center; gap: 8px; }
+  figcaption { font: 400 11px/1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .master { padding: 0; border: 0; background: none; cursor: zoom-in; border-radius: 12px; }
+  .master img { width: 168px; height: 168px; display: block; }
+  img.s128 { width: 128px; height: 128px; }
+  img.s32 { width: 32px; height: 32px; }
+  img.s16 { width: 16px; height: 16px; }
+  .px { display: flex; flex-wrap: wrap; gap: 22px; align-items: flex-end; padding-left: 22px; border-left: 1px dashed currentColor; }
+  canvas.zoom { image-rendering: pixelated; image-rendering: crisp-edges; display: block; }
+  canvas.z32 { width: 96px; height: 96px; }
+  canvas.z16 { width: 64px; height: 64px; }
+
+  .note { color: var(--muted); font-size: 13.5px; max-width: 72ch; margin: 0; }
+  .note code { font-family: var(--font-mono); font-size: 12.5px; color: var(--fg); }
+
+  .overlay {
+    position: fixed; inset: 0; background: rgba(5, 6, 9, .88); display: grid; place-items: center;
+    padding: 24px; z-index: 20; cursor: zoom-out;
+  }
+  .overlay img { width: min(1024px, 92vw, 86vh); height: auto; aspect-ratio: 1; }
+  .overlay p { margin: 10px 0 0; text-align: center; color: var(--muted); font: 400 12px/1 var(--font-mono); }
+
+  @media (max-width: 560px) {
+    h1 { font-size: 28px; }
+    .px { border-left: 0; padding-left: 0; }
+    .master img { width: 128px; height: 128px; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">IR Sensor · app icon · round 1</div>
+    <h1>Five icon concepts for the tablet app</h1>
+    <p>Each concept sits on a dark and a light launcher background. Sizes are in points, the way the macOS Dock and GNOME count them. The pixel views on the right are true 32×32 and 16×16 rasters, blown up, which is what the <code>32x32.png</code> and <code>icon.ico</code> files will contain.</p>
+  </header>
+
+  <div class="controls">
+    <span>Shape</span>
+    <div class="seg" role="group" aria-label="Icon shape">
+      <button type="button" id="shape-mac" aria-pressed="true" data-shape="mac">macOS rounded square</button>
+      <button type="button" id="shape-square" aria-pressed="false" data-shape="square">Full-bleed square (Linux)</button>
+    </div>
+  </div>
+
+  <div class="pick" id="pick"></div>
+
+  <main id="cards" class="wrap" style="padding:0;gap:20px"></main>
+
+  <p class="note">The macOS shape follows Apple's grid: an 824-point plate centred on a 1024 canvas, corners at 22.5%, with a soft shadow inside the canvas. Tauri ships the same PNG to Linux, where GNOME shows it as is, so the rounded square also works on Fedora. Click any large icon to see the 1024 master.</p>
+</div>
+
+<script>
+  const CONCEPTS = /*CONCEPTS*/[];
+  const PICK = 2;
+  const PICK_WHY = 'It is the app’s own picture, the square pulses you see on the graph, so it says what the app does rather than just its name. The thick zig-zag keeps its shape at 16 px and fills a full-bleed square as well as the rounded one. Runner-up: 4 is the most legible at 16 px, but it spells two letters and looks more generic.';
+  let shape = 'mac';
+
+  const url = (svg) => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  const loaded = new Map();
+  function loadImg(src) {
+    if (!loaded.has(src)) {
+      loaded.set(src, new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; }));
+    }
+    return loaded.get(src);
+  }
+  // Downscale by halving so the small rasters resemble what an icon tool produces.
+  async function raster(src, size, canvas) {
+    const img = await loadImg(src);
+    let cur = document.createElement('canvas');
+    cur.width = cur.height = 512;
+    let ctx = cur.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, 512, 512);
+    while (cur.width > size) {
+      const next = document.createElement('canvas');
+      next.width = next.height = cur.width / 2;
+      const nctx = next.getContext('2d');
+      nctx.imageSmoothingQuality = 'high';
+      nctx.drawImage(cur, 0, 0, next.width, next.height);
+      cur = next;
+    }
+    canvas.width = canvas.height = size;
+    canvas.getContext('2d').drawImage(cur, 0, 0);
+  }
+
+  function strip(c, tone) {
+    const src = url(c[shape]);
+    const el = document.createElement('div');
+    el.className = 'strip ' + tone;
+    el.innerHTML = `
+      <div class="strip-label">${tone === 'dark' ? 'Dark · Dock in dark mode, GNOME dark' : 'Light · Dock in light mode, GNOME light'}</div>
+      <figure><button class="master" type="button" aria-label="Open ${c.name} at 1024"><img alt="${c.name} icon" src="${src}"></button><figcaption>1024 master</figcaption></figure>
+      <figure><img class="s128" alt="" src="${src}"><figcaption>128</figcaption></figure>
+      <figure><img class="s32" alt="" src="${src}"><figcaption>32</figcaption></figure>
+      <figure><img class="s16" alt="" src="${src}"><figcaption>16</figcaption></figure>
+      <div class="px">
+        <figure><canvas class="zoom z32"></canvas><figcaption>32 px ×3</figcaption></figure>
+        <figure><canvas class="zoom z16"></canvas><figcaption>16 px ×4</figcaption></figure>
+      </div>`;
+    raster(src, 32, el.querySelector('.z32'));
+    raster(src, 16, el.querySelector('.z16'));
+    el.querySelector('.master').addEventListener('click', () => openBig(c, src));
+    return el;
+  }
+
+  function render() {
+    const root = document.getElementById('cards');
+    root.replaceChildren();
+    for (const c of CONCEPTS) {
+      const card = document.createElement('section');
+      card.className = 'card';
+      card.id = 'c' + c.n;
+      card.innerHTML = `
+        <div class="card-head">
+          <div class="num">${c.n}</div>
+          <h2>${c.name}</h2>
+          <p>${c.line}</p>
+          <div class="linux">Linux: ${c.linux}</div>
+        </div>`;
+      card.append(strip(c, 'dark'), strip(c, 'light'));
+      root.append(card);
+    }
+  }
+
+  function openBig(c, src) {
+    const o = document.createElement('div');
+    o.className = 'overlay';
+    o.innerHTML = `<div><img alt="${c.name} at 1024" src="${src}"><p>${c.n} · ${c.name} · 1024 × 1024 · click to close</p></div>`;
+    const close = () => { o.remove(); document.removeEventListener('keydown', esc); };
+    const esc = (e) => { if (e.key === 'Escape') close(); };
+    o.addEventListener('click', close);
+    document.addEventListener('keydown', esc);
+    document.body.append(o);
+  }
+
+  const pick = CONCEPTS.find((c) => c.n === PICK);
+  document.getElementById('pick').innerHTML = `<strong>My pick: ${pick.n} · ${pick.name}</strong><p>${PICK_WHY}</p>`;
+
+  for (const b of document.querySelectorAll('.seg button')) {
+    b.addEventListener('click', () => {
+      shape = b.dataset.shape;
+      for (const x of document.querySelectorAll('.seg button')) x.setAttribute('aria-pressed', String(x === b));
+      render();
+    });
+  }
+  render();
+</script>

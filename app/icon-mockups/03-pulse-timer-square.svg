@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d2331"/>
+      <stop offset="1" stop-color="#0e1014"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity=".35"/>
+    </filter>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="26"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#plate)"/><g transform="translate(512 512) scale(1.16) translate(-512 -512)">
+  <rect x="470" y="196" width="84" height="76" rx="16" fill="#5aa9ff"/>
+  <circle cx="512" cy="548" r="262" fill="#0a0c10" stroke="#5aa9ff" stroke-width="56"/>
+  <path d="M348 610 H440 V470 H584 V610 H676" fill="none" stroke="#ff3d6e" stroke-width="74" stroke-linejoin="round" stroke-linecap="round" opacity=".9" filter="url(#glow)"/>
+  <path d="M348 610 H440 V470 H584 V610 H676" fill="none" stroke="#ff3d6e" stroke-width="56" stroke-linejoin="round" stroke-linecap="round"/>
+  </g>
+</svg>

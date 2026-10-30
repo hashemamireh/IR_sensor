@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d2331"/>
+      <stop offset="1" stop-color="#0e1014"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity=".35"/>
+    </filter>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="26"/>
+    </filter>
+    <linearGradient id="beam" x1="292" y1="0" x2="640" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff3d6e" stop-opacity=".95"/>
+      <stop offset="1" stop-color="#ff3d6e" stop-opacity=".45"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#plate)" filter="url(#shadow)"/>
+  <rect x="102" y="102" width="820" height="820" rx="183" fill="none" stroke="#fff" stroke-opacity=".09" stroke-width="4"/>
+  <path d="M692 694 V786 M766 694 V786" stroke="#3b4a63" stroke-width="26" stroke-linecap="round"/>
+  <path d="M262 482 L640 396 V628 L262 542 Z" fill="url(#beam)"/>
+  <circle cx="262" cy="512" r="70" fill="#ff3d6e" filter="url(#glow)"/>
+  <circle cx="262" cy="512" r="50" fill="#ffd6e0"/>
+  <rect x="640" y="330" width="172" height="364" rx="40" fill="#5aa9ff"/>
+  <rect x="628" y="396" width="44" height="232" rx="22" fill="#ff3d6e" opacity=".9" filter="url(#glow)"/>
+  <rect x="640" y="396" width="34" height="232" rx="17" fill="#ffd6e0"/>
+</svg>

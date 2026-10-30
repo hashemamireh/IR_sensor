@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d2331"/>
+      <stop offset="1" stop-color="#0e1014"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity=".35"/>
+    </filter>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="26"/>
+    </filter>
+    <linearGradient id="beam-i" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff8aa6"/>
+      <stop offset="1" stop-color="#c3124f"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#plate)"/><g transform="translate(512 512) scale(1.16) translate(-512 -512)">
+  <rect x="270" y="290" width="96" height="444" rx="20" fill="#ff3d6e" opacity=".85" filter="url(#glow)"/>
+  <rect x="270" y="290" width="96" height="444" rx="20" fill="url(#beam-i)"/>
+  <path d="M470 734 V338 H600 A108 108 0 0 1 600 554 H470 M582 554 L716 734" fill="none" stroke="#5aa9ff" stroke-width="96" stroke-linejoin="round" stroke-linecap="butt"/>
+  </g>
+</svg>
