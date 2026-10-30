@@ -58,8 +58,13 @@ app from source by following [app/README.md](app/README.md).
 
 Releases are built by GitHub Actions ([`.github/workflows/release.yml`](.github/workflows/release.yml)):
 
-1. Set the new version in `app/src-tauri/tauri.conf.json` (and `app/package.json`), and
-   commit.
+1. Set the new version in `app/src-tauri/tauri.conf.json` (CI checks the tag against this
+   one), `app/package.json` and `app/src-tauri/Cargo.toml`. Then update `Cargo.lock` and
+   commit all four:
+
+   ```bash
+   cargo update --workspace --offline --manifest-path app/src-tauri/Cargo.toml
+   ```
 2. Tag the commit and push the tag:
 
    ```bash

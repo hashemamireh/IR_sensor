@@ -1,6 +1,6 @@
 [package]
 name = "irsensor-app"
-version = "0.1.0"
+version = "0.1.1"
 description = "Companion tablet app for the IR sensor recorder"
 edition = "2024"
 
