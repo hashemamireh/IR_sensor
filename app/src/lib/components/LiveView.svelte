@@ -144,13 +144,11 @@
 	<div class="readings">
 		<div class="big">
 			<span class="label muted">{dev.live ? 'Now' : 'Last'}</span>
-			<span class="value">{fmt(reading.now)}</span>
-			<span class="unit muted">{unit}</span>
+			<span class="row"><span class="value">{fmt(reading.now)}</span><span class="unit muted">{unit}</span></span>
 		</div>
 		<div class="big peak">
 			<span class="label muted">Peak, last {windowS} s</span>
-			<span class="value">{fmt(reading.peak)}</span>
-			<span class="unit muted">{unit}</span>
+			<span class="row"><span class="value">{fmt(reading.peak)}</span><span class="unit muted">{unit}</span></span>
 		</div>
 		{#if !inMv}
 			<p class="muted small">No calibration table from this device, so readings are raw ADC counts.</p>
@@ -237,27 +235,37 @@
 		gap: 40px;
 		flex-wrap: wrap;
 	}
+	/* Label above, then number + unit side by side. Nothing here may shrink or wrap,
+	   so a wider number pushes the unit along instead of running into it. */
 	.big {
-		display: grid;
-		grid-template-columns: auto auto;
-		align-items: baseline;
-		column-gap: 8px;
+		display: flex;
+		flex-direction: column;
+		flex: none;
+		white-space: nowrap;
 	}
 	.big .label {
-		grid-column: 1 / -1;
 		font-size: 13px;
+	}
+	.row {
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
 	}
 	.big .value {
 		font-size: 56px;
 		font-weight: 600;
 		line-height: 1.05;
 		font-variant-numeric: tabular-nums;
+		/* Room for "2,573" so the unit doesn't jump about as the reading changes */
+		min-width: 5ch;
+		text-align: right;
 	}
 	.big.peak .value {
 		font-size: 32px;
 		color: var(--muted);
 	}
 	.unit {
+		flex: none;
 		font-size: 16px;
 	}
 	.small {
