@@ -3,6 +3,7 @@
 	import { bytes } from '$lib/format';
 	import Popover from './Popover.svelte';
 	import RecordPanel from './RecordPanel.svelte';
+	import Segmented from './Segmented.svelte';
 	import SettingsPanel from './SettingsPanel.svelte';
 
 	let { dev, liveOpen = $bindable() }: { dev: DeviceController; liveOpen: boolean } = $props();
@@ -18,8 +19,14 @@
 
 	let open = $state(false);
 	let custom = $state('');
-	let settingsOpen = $state(false);
 	let recordOpen = $state(false);
+	/** The Device popover's tab: the device's settings, or which device to connect to */
+	let deviceTab = $state<'settings' | 'connection'>('settings');
+
+	function toggleDevice() {
+		if (!open) deviceTab = dev.online ? 'settings' : 'connection';
+		open = !open;
+	}
 
 	const rec = $derived(dev.online && dev.status?.state === 'recording' ? dev.status.recording : undefined);
 	const saving = $derived(dev.online && dev.status?.state === 'saving');
@@ -49,85 +56,92 @@
 <header>
 	<strong class="title">IR Sensor</strong>
 
-	<span class="conn {dev.connection}">
-		<span class="dot"></span>{label}
-	</span>
-
-	{#if dev.online && dev.status}
-		{@const s = dev.status}
-		<span class="item" class:low={s.battery.pct <= 15} title="{s.battery.mv} mV">
-			Battery {s.battery.pct}% · {(s.battery.mv / 1000).toFixed(2)} V
+	<!-- Status text; the buttons sit to its right and never wrap -->
+	<div class="info">
+		<span class="conn {dev.connection}">
+			<span class="dot"></span>{label}
 		</span>
-		<span class="item">{bytes(s.free_bytes)} free</span>
-		<span class="badge {s.state === 'idle' || s.state === 'live' ? 'ok' : 'warn'}">{stateText[s.state] ?? s.state}</span>
-		{#if !dev.timeSynced}<span class="badge">clock not synced yet</span>{/if}
-	{/if}
 
-	<span class="spacer"></span>
+		{#if dev.online && dev.status}
+			{@const s = dev.status}
+			<span class="item" class:low={s.battery.pct <= 15} title="Battery {s.battery.mv} mV">
+				Battery {s.battery.pct}% · {(s.battery.mv / 1000).toFixed(2)} V
+			</span>
+			<span class="item">{bytes(s.free_bytes)} free</span>
+			<span class="badge {s.state === 'idle' || s.state === 'live' ? 'ok' : 'warn'}">{stateText[s.state] ?? s.state}</span>
+			{#if !dev.timeSynced}<span class="badge">clock not synced yet</span>{/if}
+		{/if}
+	</div>
 
-	<button
-		class="livebtn"
-		class:on={dev.live}
-		disabled={!dev.ready}
-		aria-pressed={liveOpen}
-		title={dev.live ? (liveOpen ? 'Hide live view' : 'Show live view') : 'Start live view'}
-		onclick={toggleLive}
-	>
-		<span class="ldot"></span> Live
-	</button>
-
-	<Popover open={recordOpen} onclose={() => (recordOpen = false)} align="right" width={540} label="Record">
-		{#snippet trigger()}
-			<button
-				class="rec"
-				class:live={rec || saving}
-				disabled={!dev.online}
-				aria-expanded={recordOpen}
-				onclick={() => (recordOpen = !recordOpen)}
-			>
-				<span class="recdot"></span>
-				{#if rec}
-					<span class="num">{rec.elapsed_s} / {rec.total_s} s</span>
-				{:else if saving}
-					Saving…
-				{:else}
-					Record
-				{/if}
-			</button>
-		{/snippet}
-		<RecordPanel {dev} />
-	</Popover>
-
-	<Popover open={settingsOpen} onclose={() => (settingsOpen = false)} align="right" width={440} label="Device Settings">
-		{#snippet trigger()}
-			<button disabled={!dev.online} aria-expanded={settingsOpen} onclick={() => (settingsOpen = !settingsOpen)}>
-				Device Settings
-			</button>
-		{/snippet}
-		<SettingsPanel {dev} onclose={() => (settingsOpen = false)} />
-	</Popover>
-
-	<Popover open={open} onclose={() => (open = false)} align="right" width={340} label="Device">
-		{#snippet trigger()}
-			<button onclick={() => (open = !open)} aria-expanded={open}>Device: {host}</button>
-		{/snippet}
-		<button class="choice" class:on={dev.baseUrl === DEVICE_URL} onclick={() => choose(DEVICE_URL)}>
-			IR sensor <span class="muted">{DEVICE_URL}</span>
-		</button>
-		<button class="choice" class:on={dev.baseUrl === MOCK_URL} onclick={() => choose(MOCK_URL)}>
-			Mock device <span class="muted">{MOCK_URL}</span>
-		</button>
-		<form
-			onsubmit={(e) => {
-				e.preventDefault();
-				if (custom.trim()) choose(custom.includes('://') ? custom : `http://${custom}`);
-			}}
+	<div class="actions">
+		<button
+			class="livebtn"
+			class:on={dev.live}
+			disabled={!dev.ready}
+			aria-pressed={liveOpen}
+			title={dev.live ? (liveOpen ? 'Hide live view' : 'Show live view') : 'Start live view'}
+			onclick={toggleLive}
 		>
-			<input placeholder="Other, e.g. 192.168.1.20:8080" bind:value={custom} />
-			<button type="submit">Use</button>
-		</form>
-		<p class="muted path">Recordings are saved in<br /><code>{dev.local.root}/recordings</code></p>
-	</Popover>
+			<span class="ldot"></span> Live
+		</button>
+
+		<Popover open={recordOpen} onclose={() => (recordOpen = false)} align="right" width={540} label="Record">
+			{#snippet trigger()}
+				<button
+					class="rec"
+					class:live={rec || saving}
+					disabled={!dev.online}
+					aria-expanded={recordOpen}
+					onclick={() => (recordOpen = !recordOpen)}
+				>
+					<span class="recdot"></span>
+					{#if rec}
+						<span class="num">{rec.elapsed_s} / {rec.total_s} s</span>
+					{:else if saving}
+						Saving…
+					{:else}
+						Record
+					{/if}
+				</button>
+			{/snippet}
+			<RecordPanel {dev} />
+		</Popover>
+
+		<Popover open={open} onclose={() => (open = false)} align="right" width={460} label="Device">
+			{#snippet trigger()}
+				<button onclick={toggleDevice} aria-expanded={open}>Device: {host}</button>
+			{/snippet}
+			<Segmented label="Device menu" bind:value={deviceTab} options={[
+				{ value: 'settings', label: 'Settings' },
+				{ value: 'connection', label: 'Connection' },
+			]} />
+
+			{#if deviceTab === 'settings'}
+				{#if dev.online}
+					<SettingsPanel {dev} title={false} onclose={() => (open = false)} />
+				{:else}
+					<p class="muted">Connect to a device to change its settings.</p>
+				{/if}
+			{:else}
+				<button class="choice" class:on={dev.baseUrl === DEVICE_URL} onclick={() => choose(DEVICE_URL)}>
+					IR sensor <span class="muted">{DEVICE_URL}</span>
+				</button>
+				<button class="choice" class:on={dev.baseUrl === MOCK_URL} onclick={() => choose(MOCK_URL)}>
+					Mock device <span class="muted">{MOCK_URL}</span>
+				</button>
+				<form
+					onsubmit={(e) => {
+						e.preventDefault();
+						if (custom.trim()) choose(custom.includes('://') ? custom : `http://${custom}`);
+					}}
+				>
+					<input placeholder="Other, e.g. 192.168.1.20:8080" bind:value={custom} />
+					<button type="submit">Use</button>
+				</form>
+				<p class="muted path">Recordings are saved in<br /><code>{dev.local.root}/recordings</code></p>
+			{/if}
+		</Popover>
+	</div>
 </header>
 
 
@@ -135,15 +149,33 @@
 	header {
 		display: flex;
 		align-items: center;
-		gap: 16px;
+		gap: 14px;
 		padding: 8px 16px;
 		background: var(--panel);
 		border-bottom: 1px solid var(--border);
 		min-height: 60px;
-		flex-wrap: wrap;
 	}
 	.title {
+		flex: none;
 		font-size: 17px;
+	}
+	.info {
+		flex: 1 1 auto;
+		min-width: 0;
+		display: flex;
+		align-items: center;
+		gap: 14px;
+		white-space: nowrap;
+		overflow: hidden;
+	}
+	.info > * {
+		flex: none;
+	}
+	.actions {
+		flex: none;
+		display: flex;
+		align-items: center;
+		gap: 8px;
 	}
 	.conn {
 		display: inline-flex;
@@ -173,12 +205,11 @@
 	.item.low {
 		color: var(--warn);
 	}
-	.spacer {
-		flex: 1;
-	}
 	.choice {
+		flex: none;
 		text-align: left;
 		display: flex;
+		align-items: center;
 		justify-content: space-between;
 	}
 	.choice.on {

@@ -7,7 +7,11 @@
 	import { errorText } from '$lib/format';
 	import Segmented from './Segmented.svelte';
 
-	let { dev, onclose }: { dev: DeviceController; onclose: () => void } = $props();
+	let {
+		dev,
+		onclose,
+		title = true,
+	}: { dev: DeviceController; onclose: () => void; title?: boolean } = $props();
 
 	let saved = $state<DeviceSettings | null>(null);
 	let draft = $state<DeviceSettings | null>(null);
@@ -49,7 +53,7 @@
 	}
 </script>
 
-<h3>Device Settings <span class="muted">{dev.ssid ?? ''}</span></h3>
+{#if title}<h3>Device Settings <span class="muted">{dev.ssid ?? ''}</span></h3>{/if}
 	{#if draft}
 		<span class="label">Screen brightness</span>
 		<Segmented label="Screen brightness" bind:value={draft.brightness} options={[

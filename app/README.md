@@ -94,7 +94,7 @@ IRSENSOR_DEVICE_URL=http://127.0.0.1:8080 pnpm tauri dev  # terminal 2
 ```
 
 Without `IRSENSOR_DEVICE_URL`, the app uses whichever device you last chose. Click
-**Device: …** in the top-right corner to switch between the real device, the mock, or
+**Device: …** in the top-right corner, then its **Connection** tab, to switch between the real device, the mock, or
 another address. The mock's README lists flags worth trying, such as
 `--overrun-every 3`, `--no-calibration`, `--no-cors`, `--wake-after 5` and
 `--time-scale 5`.
@@ -255,7 +255,7 @@ thinned view.
 
 ### Device settings
 
-**Device Settings** in the status bar opens a popover that reads the device's settings (allowed in any state) and
+The **Settings** tab of the **Device: …** menu in the status bar reads the device's settings (allowed in any state) and
 saves only what you changed. Saving is disabled while the device is busy; nothing is
 queued. The Quick Start values only affect the device's own menu, not the app's
 record settings.
@@ -275,7 +275,7 @@ record settings.
 - **Record** uses the Record popover's rate and duration; the device ends live mode
   first, and the view closes.
 - **Ending:** polling doesn't count as activity, so live mode ends after the device's
-  Live timeout (Device Settings) unless you do something. When it ends from the device
+  Live timeout (Device menu → Settings) unless you do something. When it ends from the device
   (timeout, its button, another client) the view keeps the last readings and offers
   **Restart live view**.
 - **Allowed during live mode:** manual downloads, deletes and settings. Auto-downloads
@@ -301,7 +301,7 @@ These can only be checked on the real tablet. Please report back:
 - [ ] The legend chips (hide/show, − / + offset, ✕) are big enough to tap.
 - [ ] Export of a long recording to CSV finishes, and the file opens.
 - [ ] Live view: the strip chart scrolls smoothly and the big reading is readable at arm's length.
-- [ ] The Record, Device Settings, Export and Device popovers open and close comfortably by touch (tap outside closes them).
+- [ ] The Record, Export and Device popovers open and close comfortably by touch (tap outside closes them).
 
 ## Layout
 
